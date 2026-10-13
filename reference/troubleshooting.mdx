@@ -1,0 +1,185 @@
+---
+title: "Troubleshooting common errors in the Agent Kit"
+sidebarTitle: "Troubleshooting"
+description: "Diagnosis and resolution for every known Agent Kit error, grouped by cause: COM connection, PowerShell environment, screen capture, file state, and more."
+---
+
+When a script in the Agent Kit fails it throws a descriptive error message, exits with a non-zero code, and includes the HRESULT of the innermost COM or .NET exception in the form `HRESULT=0x...`. No report file is written on failure. This page covers all known error categories and the correct response for each. Read the error message and the HRESULT before acting — most failures have a specific, low-impact resolution.
+
+<Warning>
+**Do not attempt these actions to recover from any error:** calling `Application.Quit()`, `FileCloseAll`, or `CalculateAll`; running Project with `/regserver`; repairing the Office installation; editing the Windows registry; enabling or running macros; or forcibly killing `WINPROJ`. These can destroy unsaved user work or corrupt COM registration. Communicate the concrete impediment instead.
+</Warning>
+
+<Note>
+**Bounded escalation principle:** for purely read-only or window-selection failures (e.g. `Inspect`, `Test-ProjectEnvironment`, `Project-View Open`), one retry after refreshing state is acceptable if the preconditions can be met cleanly. For any mutation (e.g. `Create`, `UpdateCopy`) there is no automatic retry. Preserve the HRESULT, the failure phase, and any partial output paths for diagnosis.
+</Note>
+
+---
+
+## Connection and instance errors
+
+<Accordion title="'Expected one Project application' — no instance or multiple instances">
+  **Cause:** The script counts running `WINPROJ` processes and requires exactly one. Either no Project instance is open, or more than one is running.
+
+  **Resolution:** Observe the running processes and open windows. If Project is absent and you are authorised to open it, open it with an active document. If multiple instances exist, do not automatically close instances that may contain unsaved user work — report the situation and ask the user.
+</Accordion>
+
+<Accordion title="'GetActiveObject' cannot find the COM instance">
+  **Cause:** The COM class factory for `MSProject.Application` is not registered in the current session, no document is open, or the running instance belongs to a different user session or elevation level (e.g. elevated vs. non-elevated PowerShell).
+
+  **Resolution:** Verify that Project is open with an active document in the same session and elevation level. Do not use `/regserver` as a first step — it is rarely necessary and may have unintended side effects.
+</Accordion>
+
+<Accordion title="'ActiveProject fails' — start screen or dialog is open">
+  **Cause:** `Application.ActiveProject` throws when Project is showing its welcome/start screen without any open document, or when a modal dialog is blocking the COM interface.
+
+  **Resolution:** Create or open a project document via an authorised action. If a dialog is visible, dismiss it first. Do not close existing documents to reach this state.
+</Accordion>
+
+<Accordion title="'Version' or 'Projects' absent on direct property access">
+  **Cause:** Accessing COM properties directly (e.g. `$app.Version`) instead of through the wrapper functions can fail due to how PowerShell resolves late-bound COM objects.
+
+  **Resolution:** Always use `Get-ProjectProperty`, `Set-ProjectProperty`, and `Invoke-ProjectMethod` from `ProjectCom.ps1`. These wrappers call `Type.InvokeMember` and handle optional parameter binding correctly.
+</Accordion>
+
+---
+
+## PowerShell environment errors
+
+<Accordion title="Script throws 'Use powershell.exe -NoProfile -NonInteractive -STA -File ...'">
+  **Cause:** The script was launched with `pwsh` (PowerShell 7+) instead of `powershell.exe` (Windows PowerShell 5.1), or the `-STA` flag was omitted, leaving the thread in MTA apartment state.
+
+  **Resolution:** Re-run the script using the exact invocation:
+  ```powershell
+  powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Project-Codex.ps1" ...
+  ```
+  A retry is safe here because no mutation has occurred yet.
+</Accordion>
+
+---
+
+## Screen capture errors
+
+<Accordion title="'FrameArrived timed out' or 'window capture timed out'">
+  **Cause:** The screen capture subsystem did not deliver a frame within the expected window. This is not a Project COM error.
+
+  **Resolution:** Do not retry in a loop. Use the `Guardar-Captura-Project.ps1` GDI capture procedure if a screen capture is required and permitted. The GDI approach (`CopyFromScreen`) does not rely on a frame-delivery callback.
+</Accordion>
+
+<Accordion title="'coordinate input geometry is unavailable'">
+  **Cause:** The accessibility or UI-automation tree can be read, but coordinates for clicking are not available. The tree's presence does not guarantee that programmatic click input will work.
+
+  **Resolution:** Use COM calls for all data operations — not UI automation or mouse simulation. For visual evidence, use `Guardar-Captura-Project.ps1` (GDI capture) or `Export-ProjectImage.ps1` (native COM export).
+</Accordion>
+
+<Accordion title="'Foreground window is not Microsoft Project'">
+  **Cause:** `Guardar-Captura-Project.ps1` requires the Project window to be in the foreground. The foreground window belonged to a different process at capture time. No image was saved.
+
+  **Resolution:** Activate the correct Project window (e.g. via `Project-View.ps1 -Action Open`), confirm it is in the foreground, then re-run the capture script with a new `-OutputPath`.
+</Accordion>
+
+<Accordion title="PNG is black, covered by another window, or shows the wrong content">
+  **Cause:** The capture succeeded at the GDI level but the Project window was obscured, minimised, on a different virtual desktop, or a screensaver/lock screen was active.
+
+  **Resolution:** Do not use the image as evidence. Verify the desktop state, window focus, title (`-ExpectedTitle`), and that no overlapping window is present. Capture again with a new output path. Never fabricate or reconstruct a capture.
+</Accordion>
+
+<Accordion title="Window focus changes after maximising">
+  **Cause:** Maximising the Project window can change which window has focus, resulting in a capture of the wrong content.
+
+  **Resolution:** Re-observe and re-activate the Project window after any resize or layout operation and before capturing.
+</Accordion>
+
+---
+
+## File state errors
+
+<Accordion title="'Source has unsaved edits. Save it before copying.' (Saved=false on source)">
+  **Cause:** `UpdateCopy` and `Export-ProjectImage.ps1` refuse to copy a source file while an open Project instance reports `Saved=false` for that path. The in-memory state may differ from the disk copy.
+
+  **Resolution:** Save the source project through the Project UI (or via an authorised action) before running the copy operation. Do not blindly copy the disk file while unsaved changes exist.
+</Accordion>
+
+<Accordion title="'Saved=false' on the reopened result">
+  **Cause:** After saving and reopening the output file in read-only mode, Project occasionally reports `Saved=false` as a session metadata artefact — not because the data was not persisted.
+
+  **Resolution:** This is expected behaviour. The verification step compares only the persisted task data fields and explicitly excludes the `Saved` flag. A `PASS` report with `ReopenedVerified=true` means the data round-trips correctly despite this metadata difference.
+</Accordion>
+
+<Accordion title="'Report already exists. Choose a new path.' or 'Output already exists.'">
+  **Cause:** The script found an existing file at the `-ReportPath` or `-OutputPath` location. Overwriting is never performed automatically.
+
+  **Resolution:** Choose a new output path or report path. Do not pass `-Force`, delete the existing file, or use an overwrite flag — none of these options exist in the scripts.
+</Accordion>
+
+<Accordion title="Snapshot values don't match — 'RequestedValuesVerified' would be false">
+  **Cause:** After saving, the script re-reads the task data and compares it to the plan. If a duration, name, or percent-complete value was not applied correctly by Project, the script throws instead of producing a `PASS` report.
+
+  **Resolution:** Preserve the partial output and the exception message. Review the plan values, the calendar settings, and the `CreationMode`. Do not alter the comparison logic to force a `PASS`.
+</Accordion>
+
+---
+
+## Performance issues
+
+<Accordion title="Create or UpdateCopy is very slow (minutes per task)">
+  **Cause:** Using `CreationMode=Com` triggers one COM call per task property, which is slow for large schedules. Alternatively, the snapshot may be using `Get-ProjectSnapshotCom` (the per-property COM reader) instead of the XML bulk reader.
+
+  **Resolution:** Use `Create -CreationMode Xml` (the default). This writes all tasks as a single XML document, imports it in one COM call, and reads the snapshot via a single `FileSaveAs` to XML. Do not replace this approach with a custom COM loop.
+</Accordion>
+
+<Accordion title="The task table is taller than the screen">
+  **Cause:** `Guardar-Captura-Project.ps1` captures only the visible screen area; tasks scrolled off the bottom are not captured.
+
+  **Resolution:** Use `Export-ProjectImage.ps1`. The native `EditCopyPicture` COM method exports all selected rows regardless of scroll position, using `KeepRange=1`. Do not attempt a scroll-and-stitch series of screen captures.
+</Accordion>
+
+<Accordion title="GIF or PNG is missing the last row">
+  **Cause:** Even with `KeepRange=1`, `EditCopyPicture` is subject to available memory and rendering budget. Very large task lists may be truncated.
+
+  **Resolution:** Check the selection count, available memory, and the rendered image height. The script validates that `Height >= selectedCount * 8` pixels as a basic sanity check. Export in smaller blocks if necessary.
+</Accordion>
+
+---
+
+## XML import issues
+
+<Accordion title="Durations become zero after XML import">
+  **Cause:** The Project XML importer requires all three duration elements — `Duration`, `RemainingDuration`, and `ActualDuration` — to be present and in the `PTnHnMnS` format (explicit hours, minutes, and seconds). Omitting `RemainingDuration` has been observed to cause Project to recalculate durations to zero.
+
+  **Resolution:** Always use `ProjectXml.ps1`'s `Write-ProjectPlanXml` function, which writes all three elements. Do not simplify the XML manually or use shorthand like `P2D` or `PT8H`.
+</Accordion>
+
+<Accordion title="COM rejects a valid file path with 'invalid argument'">
+  **Cause:** When PowerShell returns an enriched string object (e.g. from `Resolve-Path`) and it is passed directly to `Type.InvokeMember`, the COM runtime may reject it because the object is not a plain `[string]`.
+
+  **Resolution:** Cast all path arguments to `[string]` before passing them to `InvokeMember`. For example: `[string]$myPath`. The scripts in the kit already do this consistently.
+</Accordion>
+
+---
+
+## Session and view errors
+
+<Accordion title="Session journal is in 'Opening' state">
+  **Cause:** `Project-View.ps1 -Action Open` writes the journal as `Status: "Opening"` before attempting `FileOpenEx`. If the open fails, the journal remains in that state. The next attempt to call `Open` with the same path will fail because the journal already exists.
+
+  **Resolution:** Inspect the list of currently open projects to determine whether the file was partially opened. Review the journal file. Do not automatically re-run `Open` — use a new session path instead.
+</Accordion>
+
+<Accordion title="Session journal has a different ProcessId than the running WINPROJ">
+  **Cause:** The Project application was closed and reopened (or crashed and restarted) since the session was created. The new process has a different PID.
+
+  **Resolution:** Do not close or modify documents based on the stale session. The `Restore` action will throw if the PID does not match, preventing accidental operations on a new Project instance. Inspect the current state manually.
+</Accordion>
+
+<Accordion title="'user input was detected' during an operation">
+  **Cause:** The agent detected that the user changed focus, selection, or window size while an operation was in progress.
+
+  **Resolution:** Stop the interaction. Re-read the window and project state with `get_window_state` or `Test-ProjectEnvironment` before deciding how to proceed. Do not switch to a different capture or automation method to continue the action that was interrupted.
+</Accordion>
+
+<Accordion title="Screen capture was stopped by the user">
+  **Cause:** The user cancelled or interrupted a Computer Use capture session.
+
+  **Resolution:** Stop all further interaction immediately. Do not switch capture tools or attempt to resume the cancelled action through a different code path.
+</Accordion>

@@ -1,0 +1,75 @@
+{
+  "projectType": "general",
+  "projectName": "MsProject2019 Agent Kit",
+  "projectDescription": "A PowerShell toolkit that lets Codex and AI agents automate Microsoft Project 2019 on Windows — creating and editing .mpp schedules via XML/COM, verifying saved files, and exporting full-schedule tables and Gantt charts to PNG without screen scrolling.",
+  "theme": "luma",
+  "primaryColor": "#0169cc",
+  "lightColor": "#0c86f5",
+  "darkColor": "#7cc4fc",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "requirements"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/create-schedule",
+              "guides/edit-schedule",
+              "guides/export-images",
+              "guides/export-tables",
+              "guides/capture-interface"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "reference/scripts",
+              "reference/input-formats",
+              "reference/report-schema",
+              "reference/troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Bulk XML import for fast schedule creation (120 tasks in ~9s) with an explicit Monday–Friday 8h/day calendar",
+    "COM automation via Windows PowerShell 5.1 STA for targeted edits to existing .mpp files by UniqueID",
+    "Native GIF → PNG export of the full task table and/or Gantt chart without screen scrolling, using Project's built-in EditCopyPicture",
+    "Pixel-identical GIF-to-PNG conversion with SHA-256 verification and animated-GIF rejection",
+    "Bulk XML snapshot for verification instead of thousands of individual COM property reads",
+    "Safe copy-before-write workflow: UpdateCopy never touches the original source file (hash-verified)",
+    "GDI screen capture for live Project window screenshots when interface evidence is required",
+    "Structured JSON input/output for all operations with strict preflight validation (null, boolean, cycle detection)",
+    "Session journal (Project-View Open/Restore) for auditable open/close of project files",
+    "Environment preflight check (Test-ProjectEnvironment) reporting PS version, apartment state, and COM availability"
+  ],
+  "publicApiSurface": [
+    "Project-Codex.ps1 -Action Inspect [-ExpectedActiveProjectPath] [-ReportPath]",
+    "Project-Codex.ps1 -Action Create -PlanPath <plan.json> -OutputPath <new.mpp> [-CreationMode Xml|Com] [-ReportPath]",
+    "Project-Codex.ps1 -Action UpdateCopy -SourcePath <src.mpp> -PlanPath <updates.json> -OutputPath <copy.mpp> [-ReportPath]",
+    "Export-ProjectImage.ps1 -ProjectPath <mpp> -OutputDirectory <dir> -Mode Table|TableAndGantt [-OptionsPath <opts.json>]",
+    "Export-ProjectTable.ps1 -ReportPath <report.json> -OutputDirectory <dir>",
+    "Project-View.ps1 -Action Open -ProjectPath <mpp> -SessionPath <session.json>",
+    "Project-View.ps1 -Action Restore -SessionPath <session.json>",
+    "Guardar-Captura-Project.ps1 -OutputPath <out.png> [-ExpectedTitle <title>] [-WindowHandle <hwnd>]",
+    "Convert-ProjectGifToPng.ps1 -InputPath <in.gif> -OutputPath <out.png>",
+    "Test-ProjectEnvironment.ps1",
+    "Test-PreflightGuards.ps1 -ScratchPath <dir>",
+    "Test-NativeImages.ps1 -RunDirectory <dir>",
+    "Test-ImageConversion.ps1 -RunDirectory <dir>",
+    "ProjectCom.ps1: Get-ProjectProperty, Set-ProjectProperty, Invoke-ProjectMethod, Get-ProjectSnapshotCom",
+    "ProjectSnapshot.ps1: Get-ProjectSnapshot",
+    "ProjectXml.ps1: Write-ProjectPlanXml"
+  ]
+}

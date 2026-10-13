@@ -1,0 +1,263 @@
+---
+title: "Create a new .mpp schedule file from a JSON task plan"
+sidebarTitle: "Create Schedule"
+description: "Run Project-Codex.ps1 -Action Create to turn a JSON task plan into a verified .mpp using XML bulk import and automatic scheduling."
+---
+
+The `Create` action in `Project-Codex.ps1` turns a structured JSON plan into a fully calculated `.mpp` file without requiring you to interact with the Project UI. You describe your tasks, durations, and predecessor relationships in a single JSON file, run one PowerShell command, and receive a verified `.mpp` alongside a machine-readable report that confirms every requested value was persisted. This page covers the two creation modes, the complete input schema, how dependency links are built and validated, the calendar that XML mode uses, and what a successful verification report looks like.
+
+## Creation modes
+
+Project-Codex supports two strategies for writing tasks into a new project file.
+
+<CardGroup cols={2}>
+  <Card title="Xml (default)" icon="bolt">
+    Writes a Microsoft Project XML interchange file and imports it in a single
+    `FileOpenEx` call with `Merge=0`. All tasks, links, durations, and progress
+    land in Project at once. Project calculates the schedule, then the script
+    saves the result as `.mpp`. **Recommended for all new schedules.**
+  </Card>
+  <Card title="Com (legacy)" icon="wrench">
+    Creates a blank project via `Projects.Add`, then adds tasks and links one
+    at a time through COM. Uses Project's current defaults for calendar and
+    working hours. Kept as a fallback; identical JSON schema and verification
+    path.
+  </Card>
+</CardGroup>
+
+<Note>
+  XML mode leaves an `.xml` file next to the `.mpp` at the same base path (e.g.
+  `base.xml` beside `base.mpp`). This file is the raw interchange document
+  written by `ProjectXml.ps1` and is useful for auditing exactly what was
+  imported. It is not deleted automatically — keep it as evidence or remove it
+  after review.
+</Note>
+
+## The XML-mode calendar
+
+When you use `CreationMode Xml` (the default), `ProjectXml.ps1` embeds an
+explicit base calendar named **Agent Standard 8h** in the interchange file.
+Its definition is fixed:
+
+| Property | Value |
+|---|---|
+| Working days | Monday – Friday (days 2–6) |
+| Morning session | 08:00 – 12:00 |
+| Afternoon session | 13:00 – 17:00 |
+| Daily work minutes | 480 |
+| Weekly work minutes | 2 400 |
+| Holidays | None |
+| Saturday / Sunday | Non-working |
+
+Project uses this calendar to compute start and finish dates from the
+`durationMinutes` values in your plan. If you need a different working pattern,
+adapt `ProjectXml.ps1`, test the XML on a disposable file, and verify the
+calendar conversion before treating it as production-ready.
+
+<Tip>
+  For existing files, read `HoursPerDay` and `MinutesPerDayConversion` from the
+  Inspect report rather than assuming 480 minutes per day. A project created
+  with XML mode always starts with 480 min/day unless you override the XML.
+</Tip>
+
+## The plan.json schema
+
+Every task field is validated before any COM connection is made. The table below
+describes the full contract; required fields are marked.
+
+<ParamField body="startDate" type="string">
+  Optional ISO 8601 local date-time (e.g. `"2026-10-12T08:00:00"`). No UTC
+  conversion is applied. If omitted, Project uses its own default start date.
+</ParamField>
+
+<ParamField body="tasks" type="array" required>
+  Non-empty ordered array of task objects. Row order in the resulting schedule
+  follows the array order.
+</ParamField>
+
+<ParamField body="tasks[].key" type="string" required>
+  Unique string within the plan used to express predecessor relationships.
+  Not stored in the `.mpp` — it is a local reference only.
+</ParamField>
+
+<ParamField body="tasks[].name" type="string" required>
+  Non-empty display name. Unicode is accepted.
+</ParamField>
+
+<ParamField body="tasks[].durationMinutes" type="number" required>
+  Work duration in minutes. Must be a JSON number (not a string like `"480"`),
+  finite, and ≥ 0. A value of `0` is treated as a milestone by the XML writer.
+</ParamField>
+
+<ParamField body="tasks[].predecessorKeys" type="array">
+  Optional list of `key` strings from the same plan. Creates finish-to-start
+  (FS) links with zero lag. No cycles, no self-references, no duplicates.
+</ParamField>
+
+<ParamField body="tasks[].percentComplete" type="integer">
+  Optional integer from 0 to 100. If omitted, defaults to 0.
+</ParamField>
+
+### Example plan
+
+This is the actual content of `examples/plan.json` included in the kit:
+
+```json plan.json
+{
+  "startDate": "2026-10-12T08:00:00",
+  "tasks": [
+    {"key": "prepare", "name": "Preparacion", "durationMinutes": 480},
+    {"key": "execute", "name": "Ejecucion", "durationMinutes": 960, "predecessorKeys": ["prepare"]},
+    {"key": "review",  "name": "Revision",  "durationMinutes": 480, "predecessorKeys": ["execute"]}
+  ]
+}
+```
+
+### Field validation rules
+
+The script enforces these constraints before opening Project:
+
+- `durationMinutes` must be a JSON number, not `null`, a boolean, or a string such as `"2 días"` or `"480"`.
+- `percentComplete` must be a whole number (no decimals) between 0 and 100.
+- Every `key` must be unique; every `name` must be non-empty.
+- `predecessorKeys` entries must reference keys that exist elsewhere in the same
+  plan and must not reference the task's own `key`.
+- Dependency cycles are detected with a topological-sort pass before any file is
+  created; if a cycle is found, the operation stops and no `.mpp` is written.
+
+## Step-by-step workflow
+
+<Steps>
+  <Step title="Set up your run directory">
+    Open Windows PowerShell 5.1 in the root of the kit repository. Define the
+    three path variables used by all subsequent commands. The run directory is
+    timestamped so each session produces a distinct folder.
+
+    ```powershell
+    $skillDir = Join-Path $PWD.Path '.agents\skills\project2019-automation'
+    $scripts   = Join-Path $skillDir 'scripts'
+    $runDir    = Join-Path $PWD.Path ('runs\demo-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    New-Item -ItemType Directory -Path $runDir -ErrorAction Stop | Out-Null
+    ```
+  </Step>
+
+  <Step title="Verify the environment">
+    Run the environment check before any mutation. It confirms that exactly one
+    `WINPROJ` instance is running, that a document is active, and that the
+    PowerShell version and apartment state are correct.
+
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA `
+      -File "$scripts\Test-ProjectEnvironment.ps1"
+    if ($LASTEXITCODE -ne 0) { throw 'Fix the environment before continuing.' }
+    ```
+  </Step>
+
+  <Step title="Write your plan.json">
+    Create a JSON file following the schema above, or copy and edit
+    `$skillDir\examples\plan.json`. Save it somewhere inside `$runDir` so all
+    inputs and outputs stay together.
+
+    ```powershell
+    # Or use the bundled example directly:
+    $planPath = "$skillDir\examples\plan.json"
+    ```
+  </Step>
+
+  <Step title="Run Project-Codex.ps1 -Action Create">
+    Pass your plan, the desired output path, and a new report path. The `-CreationMode Xml`
+    flag is the default and can be omitted; it is shown here explicitly for clarity.
+
+    <Tabs>
+      <Tab title="XML mode (recommended)">
+        ```powershell
+        powershell.exe -NoProfile -NonInteractive -STA `
+          -File "$scripts\Project-Codex.ps1" `
+          -Action Create `
+          -CreationMode Xml `
+          -PlanPath "$planPath" `
+          -OutputPath "$runDir\base.mpp" `
+          -ReportPath "$runDir\create.json"
+        if ($LASTEXITCODE -ne 0) { throw 'Review the error. Do not repeat a mutation blindly.' }
+        ```
+      </Tab>
+      <Tab title="COM mode (legacy)">
+        ```powershell
+        powershell.exe -NoProfile -NonInteractive -STA `
+          -File "$scripts\Project-Codex.ps1" `
+          -Action Create `
+          -CreationMode Com `
+          -PlanPath "$planPath" `
+          -OutputPath "$runDir\base.mpp" `
+          -ReportPath "$runDir\create.json"
+        if ($LASTEXITCODE -ne 0) { throw 'Review the error. Do not repeat a mutation blindly.' }
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Inspect the verification report">
+    Open `$runDir\create.json`. A successful run always contains these fields:
+
+    | Field | Expected value | Meaning |
+    |---|---|---|
+    | `Result` | `"PASS"` | All checks passed |
+    | `ReopenedVerified` | `true` | File was closed and reopened; persisted data matched |
+    | `RequestedValuesVerified` | `true` | Every field in the plan was confirmed in the snapshot |
+    | `OriginalSnapshotUnchanged` | `true` | The document that was active before the run was not altered |
+    | `SourceFileUnchanged` | `null` | Not applicable for Create (only set on UpdateCopy) |
+    | `SHA256` | 64-char hex | Hash of the output `.mpp` |
+    | `Output` | Absolute path | Where the `.mpp` was saved |
+
+    If `Result` is not `"PASS"`, read the error message, fix the underlying cause, and run
+    again with a **new** `OutputPath` and `ReportPath` — both paths must not already exist.
+  </Step>
+</Steps>
+
+<Warning>
+  Never repeat a failed mutation automatically. A failure after `FileSaveAs` may
+  have occurred after Project partially completed the action. Inspect the open
+  projects, any files that were written, and the HRESULT in the error message
+  before deciding to retry.
+</Warning>
+
+## How FS links are created
+
+In **XML mode**, `ProjectXml.ps1` writes a `<PredecessorLink>` element for each
+entry in `predecessorKeys`. Each link uses `<Type>1</Type>` (finish-to-start)
+and `<LinkLag>0</LinkLag>`. UIDs are assigned sequentially in task-array order
+(first task → UID 1, second → UID 2, and so on).
+
+In **COM mode**, `Project-Codex.ps1` calls
+`Task.TaskDependencies.Add(predecessorTask, 1, 0)` for each predecessor after
+all tasks are created, where `1` is the FS dependency type and `0` is zero lag.
+
+In both modes, the cycle-detection pass runs before any COM connection is
+opened: a topological sort iterates the pending list and removes tasks whose
+predecessors are all resolved. If any tasks remain after a full pass without
+progress, a cycle is detected and the script throws immediately.
+
+## Verification internals
+
+After saving the `.mpp`, the script:
+
+1. Takes a snapshot of the new project while it is still open.
+2. Verifies that every requested field (`name`, `durationMinutes`, `predecessorKeys`, `percentComplete`) matches the plan.
+3. Closes the file and reopens it read-only (`ReadOnly=true`, `NoAuto=true`).
+4. Takes a second snapshot and compares it field-by-field with the first.
+5. Re-activates the original document and confirms its snapshot is unchanged.
+6. Computes the SHA-256 of the `.mpp` on disk and records it in the report.
+
+The comparison covers: task ID, UniqueID, name, duration, predecessors,
+predecessor UniqueIDs, percent complete, scheduling mode, start, finish,
+summary flag, milestone flag, constraint type, constraint date, estimated flag,
+dependency links (type and lag), and the `Critical` flag calculated by Project.
+Project's `Name` property and `Saved` flag are excluded because they change
+as session metadata when the file is reopened.
+
+<Accordion title="What is not verified">
+  The verification pass covers the fields listed above. It does **not** certify
+  resources, costs, baselines, full calendar definitions, custom fields, or
+  visual table layouts stored inside the `.mpp`. Do not announce those as
+  verified unless you add and test the corresponding checks.
+</Accordion>

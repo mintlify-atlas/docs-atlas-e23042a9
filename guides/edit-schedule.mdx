@@ -1,0 +1,302 @@
+---
+title: "Apply targeted edits to an .mpp file with UpdateCopy"
+sidebarTitle: "Edit Schedule"
+description: "Apply field-level edits to an existing .mpp by collecting UniqueIDs from an Inspect report, then running UpdateCopy to produce a verified copy."
+---
+
+The `UpdateCopy` action lets you change task fields in an existing `.mpp` file
+without ever overwriting the original. Before applying any edits, the script
+copies the source to a new path, verifies the source file's SHA-256 hash at the
+end of the run, and produces a report that records whether the source remained
+byte-for-byte identical throughout. The workflow always follows a fixed sequence:
+open the source for inspection, read UniqueIDs from the snapshot, restore the
+previous view, write the updates JSON, and then run `UpdateCopy`. This page walks
+through every step and explains the constraints you must respect.
+
+## Why UniqueID — not row number or name
+
+Row numbers shift whenever tasks are inserted, deleted, or reordered. Names are
+not guaranteed to be unique across a project. The `UniqueID` assigned by Project
+to each task is stable for the lifetime of the file: it does not change when you
+sort, filter, promote, or demote tasks. **Always obtain UniqueIDs from an Inspect
+report generated against the exact file you intend to edit.** Do not copy
+UniqueIDs from an example, from a different file, or from a previous run where
+the file may have changed.
+
+## The full Inspect → UpdateCopy workflow
+
+<Steps>
+  <Step title="Set up path variables">
+    Open Windows PowerShell 5.1 at the kit root. Define `$skillDir`, `$scripts`,
+    and a timestamped `$runDir` for this session. Every path used below derives
+    from these three variables.
+
+    ```powershell
+    $skillDir   = Join-Path $PWD.Path '.agents\skills\project2019-automation'
+    $scripts    = Join-Path $skillDir 'scripts'
+    $runDir     = Join-Path $PWD.Path ('runs\edit-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    New-Item -ItemType Directory -Path $runDir -ErrorAction Stop | Out-Null
+
+    # Resolve the source to a canonical absolute path.
+    $sourcePath = (Resolve-Path -LiteralPath 'C:\Proyectos\cronograma.mpp').ProviderPath
+    ```
+  </Step>
+
+  <Step title="Open the source with Project-View.ps1">
+    `Project-View.ps1 -Action Open` opens the source file inside the running
+    Project instance and writes a session journal to `$sourceView`. The journal
+    records which document was active before the open, so `Restore` can return
+    to it precisely.
+
+    ```powershell
+    $sourceView = Join-Path $runDir 'source-view.json'
+    powershell.exe -NoProfile -NonInteractive -STA `
+      -File "$scripts\Project-View.ps1" `
+      -Action Open `
+      -ProjectPath $sourcePath `
+      -SessionPath $sourceView
+    if ($LASTEXITCODE -ne 0) { throw 'Review the open error and journal before continuing.' }
+    ```
+  </Step>
+
+  <Step title="Inspect with ExpectedActiveProjectPath">
+    Run `Inspect` with `-ExpectedActiveProjectPath` set to the exact absolute
+    path of the source. If the active document is anything else — for example,
+    a different file or a blank project — the script stops immediately before
+    reading any data. This prevents you from accidentally updating the wrong file.
+
+    <Tip>
+      Always supply `-ExpectedActiveProjectPath` when the source is a specific
+      named file. It is your machine-verified confirmation that Project has the
+      correct document active. The value must be the same string returned by the
+      `ActiveProject.FullName` COM property — typically the absolute canonical
+      path with the original casing.
+    </Tip>
+
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA `
+      -File "$scripts\Project-Codex.ps1" `
+      -Action Inspect `
+      -ExpectedActiveProjectPath $sourcePath `
+      -ReportPath "$runDir\source-inspect.json"
+    if ($LASTEXITCODE -ne 0) { throw 'Inspection failed. Check the report and source state.' }
+    ```
+
+    Open `$runDir\source-inspect.json`. Find each task you need to change and
+    note its `UniqueID` integer. Also review `HoursPerDay` and
+    `MinutesPerDayConversion` before expressing new durations — do not assume
+    480 minutes per day for an existing file.
+  </Step>
+
+  <Step title="Restore the previous view">
+    Call `Project-View.ps1 -Action Restore` **before** running `UpdateCopy`.
+    Inspect may leave the source open with `Saved=false` (a session-metadata
+    state from reading via an XML export). `UpdateCopy` rejects a source that
+    is currently open with unsaved edits, so restoring the view first prevents
+    that guard from triggering.
+
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA `
+      -File "$scripts\Project-View.ps1" `
+      -Action Restore `
+      -SessionPath $sourceView
+    if ($LASTEXITCODE -ne 0) { throw 'Restore failed. Do not proceed to UpdateCopy until this is resolved.' }
+    ```
+  </Step>
+
+  <Step title="Write updates.json">
+    Build your updates file using the UniqueIDs you collected from the Inspect
+    report. Save it inside `$runDir`. See the schema section below for the full
+    field reference.
+
+    ```powershell
+    # Example: write updates.json programmatically or copy/edit from the example.
+    $updatesPath = "$runDir\updates.json"
+    ```
+  </Step>
+
+  <Step title="Run Project-Codex.ps1 -Action UpdateCopy">
+    This command copies `$sourcePath` to `$runDir\edited.mpp`, applies the
+    updates, saves, reopens for verification, and records the result.
+
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA `
+      -File "$scripts\Project-Codex.ps1" `
+      -Action UpdateCopy `
+      -SourcePath $sourcePath `
+      -PlanPath $updatesPath `
+      -OutputPath "$runDir\edited.mpp" `
+      -ReportPath "$runDir\update.json"
+    if ($LASTEXITCODE -ne 0) { throw 'Review the error and state before retrying.' }
+    ```
+  </Step>
+
+  <Step title="Review the verification report">
+    Open `$runDir\update.json`. A successful run contains:
+
+    | Field | Expected value | Meaning |
+    |---|---|---|
+    | `Result` | `"PASS"` | All checks passed |
+    | `ReopenedVerified` | `true` | Output was closed and reopened; data matched |
+    | `RequestedValuesVerified` | `true` | Every updated field was confirmed in the snapshot |
+    | `OriginalSnapshotUnchanged` | `true` | The previously active document was not altered |
+    | `SourceFileUnchanged` | `true` | SHA-256 of the source `.mpp` is identical to the value recorded before the copy |
+    | `SHA256` | 64-char hex | Hash of `edited.mpp` |
+    | `Output` | Absolute path | Where the edited copy was saved |
+
+    Do not replace the original file automatically with the output. Present the
+    result to the user and let them decide what to do with both files.
+  </Step>
+</Steps>
+
+<Warning>
+  `UpdateCopy` stops with an error if the source file is currently open in
+  Project with `Saved=false`. This guard exists because a copy from disk would
+  not reflect those unsaved edits — you would be editing a stale copy. Run
+  `Project-View.ps1 -Action Restore` after every Inspect pass, and verify that
+  the source has no pending changes before calling `UpdateCopy`.
+</Warning>
+
+## The updates.json schema
+
+The update file uses a single top-level `updates` array. Each element targets
+one task by its `UniqueID`.
+
+<ParamField body="updates" type="array" required>
+  Non-empty array of update objects. Each object must include `uniqueId` and at
+  least one field to change.
+</ParamField>
+
+<ParamField body="updates[].uniqueId" type="integer" required>
+  The UniqueID of the task to modify, obtained from an Inspect report for this
+  exact file. Must be a positive integer. Each UniqueID may appear only once in
+  the array.
+</ParamField>
+
+<ParamField body="updates[].name" type="string">
+  New display name for the task. Must be non-empty if provided.
+</ParamField>
+
+<ParamField body="updates[].durationMinutes" type="number">
+  New work duration in minutes. Must be a JSON number (not a string), finite,
+  and ≥ 0. Changing duration may cause Project to recalculate downstream dates.
+</ParamField>
+
+<ParamField body="updates[].percentComplete" type="integer">
+  New completion percentage. Must be a whole number between 0 and 100.
+</ParamField>
+
+### Example updates file
+
+This is the actual content of `examples/updates.json` included in the kit:
+
+```json updates.json
+{
+  "updates": [
+    {"uniqueId": 1, "percentComplete": 25},
+    {"uniqueId": 2, "name": "Ejecucion ampliada", "durationMinutes": 1440}
+  ]
+}
+```
+
+The first entry sets task 1 to 25 % complete. The second renames task 2 and
+extends its duration to 1 440 minutes (two 8-hour working days in the XML-mode
+calendar). Fields not listed in an update entry are left unchanged.
+
+## What UpdateCopy does not support
+
+`UpdateCopy` is intentionally scoped to in-place field changes on existing tasks.
+The following operations are **not supported** and will not be silently ignored —
+they require a different approach:
+
+<Accordion title="Unsupported operations">
+  | Operation | Why it is out of scope |
+  |---|---|
+  | Adding new tasks | Requires creating COM objects and re-verifying the full task list |
+  | Removing tasks | Deleting a task shifts UniqueID assignments and invalidates existing links |
+  | Changing predecessors | Link topology changes require cycle detection and link-type logic |
+  | Assigning resources | Resource assignment is a separate COM object graph not covered by the verifier |
+  | Modifying calendars | Calendar changes affect date calculations globally and require explicit validation |
+  | Setting constraint dates | `ConstraintType` and `ConstraintDate` are read by the snapshot but not writable via `updates.json` |
+  | Renaming the project | The project `Name` field is excluded from the persistent comparison |
+
+  For any operation outside this list, read the relevant reference documents
+  and test the change on a disposable copy before applying it to a real file.
+</Accordion>
+
+## Source file hash verification
+
+Before copying the source, `UpdateCopy` records its SHA-256 hash. At the end of
+the run, after the verification re-open is complete and the original document's
+snapshot has been confirmed unchanged, the script recomputes the hash and
+compares it. If they differ, the script throws an error.
+
+The report field `SourceFileUnchanged: true` means the source `.mpp` on disk was
+not modified during the run. The original file remains your backup. Do not delete
+or overwrite it based on the output report alone.
+
+## The Saved=false guard explained
+
+When `Project-View.ps1 -Action Open` opens a file and the Inspect snapshot is
+taken via XML export (`Get-ProjectSnapshot`), Project may internally mark the
+document as having unsaved session state even though no task data changed. If
+`UpdateCopy` detects the source file in Project's open project list with
+`Saved=false`, it stops:
+
+```text
+Source has unsaved edits. Save it before copying.
+```
+
+This is not a sign of data corruption. It simply means the file must be closed
+or its session state cleared before the copy step. Running `Project-View.ps1
+-Action Restore` between Inspect and UpdateCopy (as shown in the workflow above)
+is the standard way to avoid this condition.
+
+<Warning>
+  If the source genuinely has unsaved edits from earlier work — not from the
+  Inspect pass — you must decide which version to keep before proceeding. The
+  script will not save, discard, or close those edits on your behalf.
+</Warning>
+
+## Full command reference for this workflow
+
+The four commands below represent the complete safe edit workflow in the order
+they must be executed. Replace the placeholder paths with your actual values.
+
+```powershell
+# 1. Open source
+powershell.exe -NoProfile -NonInteractive -STA `
+  -File "$scripts\Project-View.ps1" `
+  -Action Open `
+  -ProjectPath $sourcePath `
+  -SessionPath "$runDir\source-view.json"
+
+# 2. Inspect and collect UniqueIDs
+powershell.exe -NoProfile -NonInteractive -STA `
+  -File "$scripts\Project-Codex.ps1" `
+  -Action Inspect `
+  -ExpectedActiveProjectPath $sourcePath `
+  -ReportPath "$runDir\source-inspect.json"
+
+# 3. Restore previous view (required before UpdateCopy)
+powershell.exe -NoProfile -NonInteractive -STA `
+  -File "$scripts\Project-View.ps1" `
+  -Action Restore `
+  -SessionPath "$runDir\source-view.json"
+
+# 4. Apply updates to a new copy
+powershell.exe -NoProfile -NonInteractive -STA `
+  -File "$scripts\Project-Codex.ps1" `
+  -Action UpdateCopy `
+  -SourcePath $sourcePath `
+  -PlanPath "$runDir\updates.json" `
+  -OutputPath "$runDir\edited.mpp" `
+  -ReportPath "$runDir\update.json"
+```
+
+<Info>
+  All four commands must be run in Windows PowerShell 5.1 (`powershell.exe`)
+  with `-NoProfile -NonInteractive -STA`. Do not use PowerShell 7 (`pwsh`) or
+  WSL. The COM bridge to Microsoft Project 2019 requires the STA apartment
+  model provided by Windows PowerShell 5.1 in STA mode.
+</Info>

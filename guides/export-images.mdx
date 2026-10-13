@@ -1,0 +1,171 @@
+---
+title: "Export Gantt charts and table views to full PNG images"
+sidebarTitle: "Export Images"
+description: "Use Project's native GIF engine to capture every row—including off-screen tasks—then convert pixel-identical to PNG without scroll or screen capture."
+---
+
+Microsoft Project 2019 can render any selection of task rows directly to a GIF file using its built-in **Copy Picture** engine. Every row in the selection is included, even those that don't fit on screen, so you never need to scroll and stitch multiple screenshots together. The kit's `Export-ProjectImage.ps1` script drives that engine via COM, converts the result to a pixel-identical PNG, and writes a JSON report with dimensions, SHA-256 hashes, and a list of the exported task IDs. No Python, Pillow, ImageMagick, or external tools are required—only .NET components that ship with Windows.
+
+## Why native export
+
+Project's `EditCopyPicture` COM method accepts a filename and a `KeepRange=1` option that preserves the full selection without forced scaling or truncation. The script selects every requested task, calls that method with `SelectedRows=true`, and hands the resulting GIF to `Convert-ProjectGifToPng.ps1` for a lossless conversion verified by pixel hash. The exported image reflects exactly what Project calculated; no screen session, active window, or Computer Use step is needed.
+
+<Note>
+  `VisualReviewRequired` is always `true` in `export.json`. `Result: EXPORTED`, `SelectionVerified: true`, and `PixelIdentical: true` confirm the selection and the pixel-perfect conversion—but they do not prove that every label is legible or that Project did not silently clip the image due to a memory limit. Open the PNG and inspect it before delivering.
+</Note>
+
+## The two export modes
+
+<CardGroup cols={2}>
+  <Card title="Table" icon="table">
+    Renders the task table columns only. Uses Project's **Task Sheet** view internally. Faster and produces a narrower image well-suited for row data.
+  </Card>
+  <Card title="TableAndGantt" icon="chart-gantt">
+    Renders columns plus Gantt bars side by side. Uses Project's **Gantt Chart** view internally. Accepts optional `fromDate`/`toDate` to restrict the timeline shown.
+  </Card>
+</CardGroup>
+
+## Running the export
+
+Open PowerShell from the kit's root folder. The script requires Windows PowerShell 5.1 (`powershell.exe`) in STA mode. A single Microsoft Project instance must be running with an active, saved document.
+
+<Steps>
+  <Step title="Define your paths">
+    Set the script directory, your `.mpp` source, and a **new** output folder. The script refuses to write into an existing directory.
+
+    ```powershell
+    $scripts   = Join-Path $PWD.Path '.agents\skills\project2019-automation\scripts'
+    $mppPath   = 'C:\Projects\schedule.mpp'
+    $outputDir = 'C:\Projects\runs\image-export-01'
+    ```
+  </Step>
+
+  <Step title="Export table + Gantt">
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Export-ProjectImage.ps1" `
+      -ProjectPath $mppPath `
+      -OutputDirectory $outputDir `
+      -Mode TableAndGantt
+    if ($LASTEXITCODE -ne 0) { throw 'Export failed. Review output and export.json before retrying.' }
+    ```
+
+    For a table-only image, replace `-Mode TableAndGantt` with `-Mode Table`.
+
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Export-ProjectImage.ps1" `
+      -ProjectPath $mppPath `
+      -OutputDirectory $outputDir `
+      -Mode Table
+    if ($LASTEXITCODE -ne 0) { throw 'Export failed. Review output and export.json before retrying.' }
+    ```
+  </Step>
+
+  <Step title="Review the output files">
+    The script leaves four items in `$outputDir`:
+
+    | File | Contents |
+    | --- | --- |
+    | `project.gif` | Original GIF exported by Project's native engine |
+    | `project.png` | Pixel-identical PNG verified by SHA-256 |
+    | `export.json` | Rows, UniqueIDs, columns, dimensions, hashes, and `VisualReviewRequired: true` |
+    | `render-*.mpp` | Working copy kept for diagnosis; view changes are not saved back to the source |
+  </Step>
+
+  <Step title="Open the PNG and verify">
+    Open `project.png` at 100 % zoom. A viewer that scales a tall image down can make it look blurry without altering the file. Check:
+
+    - Column headers match what you requested.
+    - The first and last task listed in `export.json` under `FirstTask` / `LastTask` are both visible.
+    - Long task names are not clipped by a narrow `Name` column.
+    - Both ends of the Gantt bar area are within the image (for `TableAndGantt` mode).
+    - The image is legible—not blocky or washed out.
+  </Step>
+</Steps>
+
+## Selecting specific tasks and columns with OptionsPath
+
+Pass a UTF-8 JSON file to `-OptionsPath` to control which tasks and columns appear in the image. Omitting `taskUniqueIds` exports every task in the project, including rows that are off-screen.
+
+```json
+{
+  "taskUniqueIds": [1, 60, 120],
+  "columns": [
+    { "field": "ID",              "width": 5  },
+    { "field": "Name",            "width": 45, "title": "Task" },
+    { "field": "Duration",        "width": 12, "title": "Duration" },
+    { "field": "Start",           "width": 18 },
+    { "field": "Finish",          "width": 18 },
+    { "field": "PercentComplete", "width": 14, "title": "Complete %" }
+  ]
+}
+```
+
+<Tip>
+  Obtain `UniqueID` values from the JSON snapshot produced by `Project-Codex.ps1 -Action Inspect` or from the `PASS` report of your last `Create` or `UpdateCopy` run. Never substitute row numbers for UniqueIDs—row positions change when filters or sorting are applied.
+</Tip>
+
+### Supported column fields
+
+The `field` identifiers are fixed and language-independent regardless of your Office locale. You may supply between 1 and 12 columns. `width` must be a JSON integer from 3 to 100 (Project column-width units). An explicit `title` overrides the default label from your Project installation.
+
+| `field` | Default label |
+| --- | --- |
+| `ID` | ID |
+| `UniqueID` | Unique ID |
+| `Name` | Task Name |
+| `Duration` | Duration |
+| `Start` | Start |
+| `Finish` | Finish |
+| `Predecessors` | Predecessors |
+| `PercentComplete` | % Complete |
+| `ResourceNames` | Resource Names |
+
+<Warning>
+  Duplicate `field` entries in the `columns` array are rejected. A temporary table is created inside the rendering copy of your `.mpp`; it does not modify `Global.MPT` or save any layout to the source file.
+</Warning>
+
+## Date range for Gantt mode
+
+`fromDate` and `toDate` are accepted only with `-Mode TableAndGantt`. Both must be supplied together with a positive interval using local ISO-8601 format. Without them, the script derives the range automatically from the earliest start and latest finish of the selected tasks, with a one-day margin on each side.
+
+```json
+{
+  "fromDate": "2026-10-11T00:00:00",
+  "toDate":   "2026-10-29T00:00:00"
+}
+```
+
+<Note>
+  Explicit dates intentionally restrict the period shown—they do not guarantee the full schedule is visible. Unscheduled (manual) tasks with no calculated dates will cause the export to fail; ensure all selected tasks have valid `Start` and `Finish` values before exporting Gantt mode.
+</Note>
+
+## Converting a GIF manually
+
+If you exported a GIF through the Project interface rather than via the script, you can convert it independently:
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Convert-ProjectGifToPng.ps1" `
+  -InputPath  'C:\Projects\table.gif' `
+  -OutputPath 'C:\Projects\table.png'
+```
+
+The converter verifies pixel identity by SHA-256, rejects animated GIFs to avoid silently discarding frames, and enforces a 100-megapixel budget.
+
+<Warning>
+  GIF is a palette-indexed format with a maximum of 256 colors per frame. Project may reduce the color palette when generating the export. The PNG produced by `Convert-ProjectGifToPng.ps1` is pixel-identical to that GIF—it does not recover any color detail that was lost during the original GIF generation. If color fidelity is critical, inspect the GIF immediately after export before relying on the PNG.
+</Warning>
+
+## Performance benchmarks
+
+The figures below come from a local test documented in `VALIDATION.md`, using a synthetic 120-task project with ten finish-to-start chains, one milestone, 25 % progress, Unicode text, and XML-escaped characters. They are measurements from that specific fixture, not guaranteed timings for other files.
+
+| Operation | Scope | Local time |
+| --- | --- | --- |
+| XML create, save, and re-open verification | 120 tasks | 9.35 s |
+| Table export → GIF → PNG | 747 × 2180 px; tasks 1–120 | 8.04 s |
+| Table + Gantt export → GIF → PNG | 1492 × 3339 px; tasks 1–120 | 9.05 s |
+| Non-contiguous selection, custom columns | 540 × 74 px; UniqueID 1, 60, 120 | 11.04 s |
+
+<Tip>
+  Reuse an existing `.mpp` and its last `PASS` report for follow-up export requests. Do not rebuild the schedule or re-run `Inspect` if neither the file nor the task selection has changed.
+</Tip>

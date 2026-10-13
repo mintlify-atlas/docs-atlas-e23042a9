@@ -1,0 +1,136 @@
+---
+title: "System Requirements for MsProject2019 Agent Kit"
+sidebarTitle: "Requirements"
+description: "Every hard prerequisite the kit needs — Windows desktop, Project 2019, WinPS 5.1 STA, a single WINPROJ instance, and a writable output folder."
+---
+
+MsProject2019 Agent Kit automates the Microsoft Project 2019 desktop application from PowerShell using COM automation, XML import, and GDI screen capture. Because it controls a local GUI application, every requirement listed here is a hard dependency — there is no cloud fallback, no headless mode, and no way to satisfy these with a different runtime. Check each item before running any script.
+
+<Warning>
+  All scripts must be called with **`powershell.exe -NoProfile -NonInteractive -STA -File`**. This means Windows PowerShell 5.1 (`powershell.exe`) running in **Single-Threaded Apartment (STA)** mode. Using `pwsh`, PowerShell 7, PowerShell Core, or WSL will cause an immediate failure — COM apartment threading is not compatible with the multi-threaded default of those runtimes. The scripts check this at startup and throw before attempting any Project connection.
+</Warning>
+
+## Requirements at a glance
+
+| Requirement | Details |
+|-------------|---------|
+| **Operating system** | Windows — the same user session where Project is installed and running |
+| **Microsoft Project** | Project 2019 **desktop** edition, installed and licensed. Not Project Online, Project for the web, Planner, or ProjectLibre |
+| **PowerShell** | Windows PowerShell **5.1** (`powershell.exe`), **STA mode** (`-STA` flag). `Application.Version` returns `16.0`; that value alone does not distinguish Project 2019 from other Office 16-based editions |
+| **Project instances** | Exactly **one running `WINPROJ` process** with at least one document open. Multiple documents inside a single instance are allowed |
+| **Output folder** | A writable directory with a new file name. Scripts refuse to overwrite an existing output file |
+| **Desktop session** | An unlocked, interactive Windows desktop session. For GDI captures and image exports, Project must be visible; a locked screen or a remote session without a display will prevent captures |
+| **User permissions** | Standard user permissions are sufficient. No administrator rights, no elevated prompt, and no changes to execution policy or security settings are needed |
+| **Network / API key** | None. The kit operates entirely locally |
+
+## What you do NOT need
+
+<CardGroup cols={2}>
+  <Card title="No API key" icon="key">
+    The kit calls no external service. There is no registration step and no credential to store.
+  </Card>
+  <Card title="No VBA or macros" icon="ban">
+    No VBA macro is recorded, stored, or triggered. Do not enable macros to use this kit.
+  </Card>
+  <Card title="No Office add-ins" icon="puzzle-piece">
+    No Office add-in, VSTO component, or COM add-in is installed or required.
+  </Card>
+  <Card title="No Python runtime" icon="snake">
+    GIF-to-PNG conversion uses .NET APIs built into Windows. Python was used only during kit development for validation purposes — it is not needed to run any script.
+  </Card>
+</CardGroup>
+
+<Note>
+  The scripts do not disable execution policies or security controls. If your machine has a restrictive policy, resolve it using the approved procedure for your environment before running the kit. The kit will not attempt to work around it.
+</Note>
+
+## Verify your environment
+
+Run `Test-ProjectEnvironment.ps1` to confirm that all runtime conditions are met. Open Project with a blank or intended document first, then run:
+
+```powershell
+$skillDir = Join-Path $PWD.Path '.agents\skills\project2019-automation'
+$scripts   = Join-Path $skillDir 'scripts'
+
+powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Test-ProjectEnvironment.ps1"
+```
+
+### READY result
+
+When every condition passes, the script exits with code `0` and prints a JSON object:
+
+```json
+{
+  "Result": "READY",
+  "PowerShell": "5.1.19041.6456",
+  "Apartment": "STA",
+  "Is64BitProcess": true,
+  "ApplicationVersion": "16.0",
+  "OpenProjects": 1,
+  "ActiveProject": "C:\\Users\\you\\Documents\\MySchedule.mpp",
+  "Saved": true,
+  "TaskCount": 3
+}
+```
+
+| Field | What to check |
+|-------|--------------|
+| `Result` | Must be `"READY"` |
+| `PowerShell` | Must start with `5.1` |
+| `Apartment` | Must be `"STA"` |
+| `ApplicationVersion` | `"16.0"` for Project 2019 (Office 16 base) |
+| `OpenProjects` | `1` or more — at least one document is open |
+| `ActiveProject` | The full path of the document that will be operated on. Note this value; pass it as `-ExpectedActiveProjectPath` to `Inspect` when you want to confirm the correct file is active |
+| `Saved` | If `false`, the active document has unsaved changes. Save it before creating a copy |
+| `TaskCount` | Number of tasks in the active document (excluding the project-summary row) |
+
+### Failure cases
+
+If the script exits with a non-zero code, the error message identifies the specific condition. Common failures and their fixes:
+
+<Accordion title="Wrong PowerShell executable or apartment">
+  **Error:** `Use Windows PowerShell 5.1 with -STA.`
+
+  You invoked the script with `pwsh` or without the `-STA` flag. Call it exactly as shown:
+
+  ```powershell
+  powershell.exe -NoProfile -NonInteractive -STA -File "...\Test-ProjectEnvironment.ps1"
+  ```
+</Accordion>
+
+<Accordion title="No running Project instance">
+  **Error:** `Expected exactly one running Project application.`
+
+  `WINPROJ` is not running or there are zero instances. Open Microsoft Project 2019, wait for it to finish loading, and re-run the check.
+</Accordion>
+
+<Accordion title="More than one Project instance">
+  **Error:** `Expected exactly one running Project application.`
+
+  Multiple `WINPROJ` processes are running. Close the extra instances. Do **not** close documents that belong to other users or sessions — resolve this through normal Windows session management.
+</Accordion>
+
+<Accordion title="No active document">
+  If Project is open but no document is active, the COM call to `ActiveProject` will fail. Create a new blank project or open an existing file.
+</Accordion>
+
+## Desktop and capture requirements
+
+GDI captures (`Guardar-Captura-Project.ps1`) and native image exports (`Export-ProjectImage.ps1`) impose additional conditions:
+
+- The Windows desktop must be **unlocked** and displaying an active user session.
+- Project must be **visible and in the foreground** for GDI captures. If another window is on top of Project when the capture runs, that window's content will appear in the image.
+- For native image exports, the exporter opens its own copy of the file and manages the window state internally — you do not need to manually bring Project to the foreground for that operation.
+- Remote desktop sessions and headless server environments are not tested and are not guaranteed to work for capture operations.
+
+<Tip>
+  Computer Use is useful for identifying and activating the correct Project window before a GDI capture. Alternatively, the user can bring Project to the foreground manually before the capture command runs.
+</Tip>
+
+## Single-instance rule
+
+The kit relies on `Marshal.GetActiveObject('MSProject.Application')` to obtain the running COM server. This call returns the first registered instance. If two `WINPROJ` processes are running, the kit has no way to select the intended one reliably. Keep exactly one instance open for the duration of any automated operation.
+
+<Warning>
+  Do not call `Quit`, `FileCloseAll`, or `CalculateAll` as a workaround for instance conflicts. Those calls affect the user's open documents. Resolve instance conflicts by closing the extra window through normal Windows means before starting the kit.
+</Warning>

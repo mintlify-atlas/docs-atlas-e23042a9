@@ -1,0 +1,183 @@
+---
+title: "JSON input formats: plans, updates, image options"
+sidebarTitle: "Input Formats"
+description: "Schema reference for every JSON file consumed by the Agent Kit — create plans, UpdateCopy updates, and Export-ProjectImage column and filter options."
+---
+
+Every script in the Agent Kit communicates through JSON files rather than through command-line strings or keyboard input. This page documents the three JSON input schemas: the plan used with `-Action Create`, the updates object used with `-Action UpdateCopy`, and the image-options file accepted by `Export-ProjectImage.ps1`. All files must be UTF-8 encoded without BOM. Numeric fields must be JSON numbers — not quoted strings or booleans.
+
+<Warning>
+Sending `null` for a field is not the same as omitting it. **`null` is always rejected.** Omitting an optional field preserves the task's current value. This distinction matters most in update objects: send only the fields you want to change.
+</Warning>
+
+---
+
+## Create plan (`plan.json`)
+
+Passed to `Project-Codex.ps1 -Action Create -PlanPath plan.json`. Describes a complete new schedule.
+
+<ParamField body="startDate" type="string">
+  Optional. ISO 8601 local date-time (`"2026-10-12T08:00:00"`). No implicit UTC conversion is applied. When omitted, Project uses its own default start date. Example: `"2026-10-12T08:00:00"`.
+</ParamField>
+
+<ParamField body="tasks" type="array" required>
+  Non-empty array of task objects. The order of the array determines the initial row order in the project file.
+</ParamField>
+
+<ParamField body="tasks[].key" type="string" required>
+  A unique string identifier for this task within the plan. Used only by the plan to express predecessor relationships; it does not become the task's Project ID or UniqueID.
+</ParamField>
+
+<ParamField body="tasks[].name" type="string" required>
+  Non-empty display name for the task. Unicode is supported. Whitespace-only values are rejected.
+</ParamField>
+
+<ParamField body="tasks[].durationMinutes" type="number" required>
+  Duration in working minutes. Must be a finite, non-negative JSON number. A value of `0` creates a milestone. Do not pass strings such as `"2 days"` or `"480"` — the field must be a JSON number.
+</ParamField>
+
+<ParamField body="tasks[].predecessorKeys" type="array">
+  Optional. Array of `key` values from other tasks in the same plan. All links are Finish-to-Start with zero lag. The plan must be acyclic and no task may list itself. Omit this field (or supply an empty array) for tasks with no predecessors.
+</ParamField>
+
+<ParamField body="tasks[].percentComplete" type="integer">
+  Optional. Integer from `0` to `100` inclusive. Fractional values (e.g. `33.3`) are rejected. When omitted the task is created with `0%` complete.
+</ParamField>
+
+<Note>
+The `Create` action only supports `key`, `name`, `durationMinutes`, `predecessorKeys`, and `percentComplete`. Any other field name causes an immediate validation error. Fields such as resource assignments, constraints, or calendars are not accepted.
+</Note>
+
+### Complete plan.json example
+
+```json plan.json
+{
+  "startDate": "2026-10-12T08:00:00",
+  "tasks": [
+    { "key": "prepare", "name": "Preparacion",  "durationMinutes": 480 },
+    { "key": "execute", "name": "Ejecucion",    "durationMinutes": 960, "predecessorKeys": ["prepare"] },
+    { "key": "review",  "name": "Revision",     "durationMinutes": 480, "predecessorKeys": ["execute"] }
+  ]
+}
+```
+
+---
+
+## UpdateCopy updates (`updates.json`)
+
+Passed to `Project-Codex.ps1 -Action UpdateCopy -PlanPath updates.json`. Describes field changes to apply to a copy of an existing file.
+
+<ParamField body="updates" type="array" required>
+  Non-empty array of update objects. Each object must target a different task, identified by its `uniqueId`.
+</ParamField>
+
+<ParamField body="updates[].uniqueId" type="integer" required>
+  The Project `UniqueID` of the task to update. Must be a positive integer (≥ 1 and ≤ `Int32.MaxValue`). Obtain this value from the `Project.Tasks[].UniqueID` field of an `Inspect` report for the same file — do not guess or reuse values from a different project.
+</ParamField>
+
+<ParamField body="updates[].name" type="string">
+  Optional. New display name. Must be non-empty if provided.
+</ParamField>
+
+<ParamField body="updates[].durationMinutes" type="number">
+  Optional. New duration in working minutes. Must be a finite, non-negative JSON number.
+</ParamField>
+
+<ParamField body="updates[].percentComplete" type="integer">
+  Optional. New percent complete. Integer from `0` to `100` inclusive.
+</ParamField>
+
+<Note>
+`UpdateCopy` does not add, remove, or reorder tasks, and it does not modify predecessor links, calendars, or resources. If you need to change those fields, use a separate workflow.
+</Note>
+
+### Complete updates.json example
+
+```json updates.json
+{
+  "updates": [
+    { "uniqueId": 1, "percentComplete": 25 },
+    { "uniqueId": 2, "name": "Ejecucion ampliada", "durationMinutes": 1440 }
+  ]
+}
+```
+
+---
+
+## Image options (`image-options.json`)
+
+Passed to `Export-ProjectImage.ps1 -OptionsPath image-options.json`. All keys are optional. Any key not listed below causes an error.
+
+<ParamField body="taskUniqueIds" type="array">
+  Optional. Array of positive integers specifying which tasks to include in the export. Each value must be a positive integer that corresponds to an existing task `UniqueID`. The array must be non-empty and contain no duplicates. When omitted, all tasks are selected.
+</ParamField>
+
+<ParamField body="columns" type="array">
+  Optional. Array of column descriptor objects (between 1 and 12 entries). When omitted the default set `[ID, Name, Duration, Start, Finish, Predecessors]` is used. Duplicate fields are not permitted.
+</ParamField>
+
+<ParamField body="columns[].field" type="string" required>
+  Name of the Project field to display. Supported values: `ID`, `UniqueID`, `Name`, `Duration`, `Start`, `Finish`, `Predecessors`, `PercentComplete`, `ResourceNames`.
+</ParamField>
+
+<ParamField body="columns[].width" type="integer" required>
+  Column width in characters. Must be a JSON integer between `3` and `100` inclusive. Fractional values are rejected.
+</ParamField>
+
+<ParamField body="columns[].title" type="string">
+  Optional. Custom column header text. When omitted, Project's default field label is used.
+</ParamField>
+
+<ParamField body="fromDate" type="string">
+  Optional. ISO local date or date-time (`"2026-10-12"` or `"2026-10-12T08:00:00"`). Applies only to `Mode TableAndGantt`. Must be provided together with `toDate`, and `toDate` must be after `fromDate`. When omitted the Gantt range is derived automatically from the selected tasks' start and finish dates.
+</ParamField>
+
+<ParamField body="toDate" type="string">
+  Optional. ISO local date or date-time. See `fromDate` above.
+</ParamField>
+
+### Complete image-options example
+
+```json image-options.json
+{
+  "taskUniqueIds": [1, 2, 3],
+  "columns": [
+    { "field": "ID",              "width": 5  },
+    { "field": "Name",            "width": 40, "title": "Task Name" },
+    { "field": "Duration",        "width": 12 },
+    { "field": "Start",           "width": 18 },
+    { "field": "Finish",          "width": 18 },
+    { "field": "Predecessors",    "width": 14 },
+    { "field": "PercentComplete", "width": 10, "title": "% Done" }
+  ],
+  "fromDate": "2026-10-12",
+  "toDate":   "2026-11-30"
+}
+```
+
+---
+
+## Validation rules summary
+
+<Accordion title="Numeric field rules">
+  All numeric fields (`durationMinutes`, `percentComplete`, `uniqueId`, column `width`, and task IDs in `taskUniqueIds`) must be JSON numbers. The following are rejected:
+
+  - `null` — always rejected; use omission to leave a value unchanged.
+  - Boolean values (`true`, `false`).
+  - Quoted strings (`"480"`, `"25%"`).
+  - `NaN` and `Infinity`.
+  - Fractional values where an integer is required (`percentComplete`, `uniqueId`, `width`).
+  - Negative values where a non-negative number is required (`durationMinutes`).
+  - Values outside declared ranges (`percentComplete` must be 0–100; `uniqueId` must be ≥ 1).
+</Accordion>
+
+<Accordion title="Predecessor and dependency rules">
+  - Each `predecessorKeys` entry must reference a `key` that exists elsewhere in the same `tasks` array.
+  - A task cannot list its own `key` as a predecessor.
+  - The set of all predecessor relationships must be acyclic. The script performs a topological sort and throws `"Dependency cycle detected"` if no valid ordering exists.
+  - Duplicate keys within a single task's `predecessorKeys` array are not validated for uniqueness, but they produce duplicate links in Project.
+</Accordion>
+
+<Accordion title="Field name rules">
+  Any field name in a task or update object that is not in the supported set causes an immediate error. For task objects the supported fields are `key`, `name`, `durationMinutes`, `predecessorKeys`, and `percentComplete`. For update objects the supported fields are `uniqueId`, `name`, `durationMinutes`, and `percentComplete`.
+</Accordion>

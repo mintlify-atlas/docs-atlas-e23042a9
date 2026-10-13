@@ -1,47 +1,163 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with MsProject2019 Agent Kit"
+sidebarTitle: "Quickstart"
+description: "Clone the repo, verify your Project environment, create a three-task schedule from a JSON plan, and export a full PNG image — all in a single session."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through the complete end-to-end flow: cloning the kit, checking that your environment is ready, creating a schedule from the included example plan, confirming the verification report shows `PASS`, and exporting a full-resolution PNG image. All commands use Windows PowerShell 5.1 and the exact syntax required by the scripts.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+<Note>
+  All scripts must be invoked with `powershell.exe -NoProfile -NonInteractive -STA -File`. Do **not** use `pwsh`, PowerShell 7, or WSL — COM apartment threading requires Windows PowerShell 5.1 in STA mode. Calling the wrong executable will cause an immediate error before any Project automation begins.
+</Note>
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
 
-    ```bash
-    npm install your-package
-    ```
-  </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+  <Step title="Clone the repository">
+    Clone or download the kit onto the same Windows machine where Microsoft Project 2019 is installed. The code is path-agnostic — it builds all paths at runtime and does not depend on a specific drive letter or user profile.
 
-    ```bash
-    your-cli init
+    ```powershell
+    git clone https://github.com/Sigilo-dev/MsProject2019-Agent-Kit.git
+    cd MsProject2019-Agent-Kit
     ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
-    ```
+    If you prefer a ZIP download, extract it and open a PowerShell window in the resulting folder. All commands below assume your working directory is the **repository root**.
+
+    <Tip>
+      Keep `.agents/` intact when copying or compressing. Some file explorers hide dot-prefixed directories. The skill, all scripts, references, and example JSON live inside that directory.
+    </Tip>
   </Step>
+
+  <Step title="Open Microsoft Project with an active document">
+    The environment check requires exactly **one running `WINPROJ` process** with at least one document open. Open a blank project or the file you intend to work with. Resolve any pending dialogs before proceeding.
+
+    The script will not close other documents or Project instances on your behalf — it will stop and report the discrepancy instead.
+  </Step>
+
+  <Step title="Verify the environment">
+    Run `Test-ProjectEnvironment.ps1` to confirm that PowerShell 5.1 STA, a single Project instance, and an active document are all present:
+
+    ```powershell
+    $skillDir = Join-Path $PWD.Path '.agents\skills\project2019-automation'
+    $scripts   = Join-Path $skillDir 'scripts'
+
+    powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Test-ProjectEnvironment.ps1"
+    ```
+
+    A successful result looks like this:
+
+    ```json
+    {
+      "Result": "READY",
+      "PowerShell": "5.1.19041.6456",
+      "Apartment": "STA",
+      "Is64BitProcess": true,
+      "ApplicationVersion": "16.0",
+      "OpenProjects": 1,
+      "ActiveProject": "C:\\Users\\you\\Documents\\Project1.mpp",
+      "Saved": true,
+      "TaskCount": 0
+    }
+    ```
+
+    If the result is not `READY`, read the error message. Common causes are: `pwsh` used instead of `powershell.exe`, no running Project instance, or more than one `WINPROJ` process. Fix the reported condition before continuing.
+  </Step>
+
+  <Step title="Create a run directory">
+    Every run writes its outputs — `.mpp` files, JSON reports, images — into a dedicated folder under `runs/`. Create one now:
+
+    ```powershell
+    $runDir = Join-Path $PWD.Path ('runs\demo-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    New-Item -ItemType Directory -Path $runDir -ErrorAction Stop | Out-Null
+    ```
+
+    <Tip>
+      The `runs/` directory is excluded from Git by default. It is safe to create as many run folders as you need. Never use an existing run folder as output — the scripts reject paths that already contain the target filename.
+    </Tip>
+  </Step>
+
+  <Step title="Review the example plan">
+    The kit ships with a ready-to-use example at `.agents/skills/project2019-automation/examples/plan.json`. It defines three finish-to-start tasks starting on 12 October 2026:
+
+    ```json
+    {
+      "startDate": "2026-10-12T08:00:00",
+      "tasks": [
+        { "key": "prepare", "name": "Preparacion",  "durationMinutes": 480  },
+        { "key": "execute", "name": "Ejecucion",    "durationMinutes": 960, "predecessorKeys": ["prepare"] },
+        { "key": "review",  "name": "Revision",     "durationMinutes": 480, "predecessorKeys": ["execute"] }
+      ]
+    }
+    ```
+
+    `durationMinutes` values are work minutes, not calendar minutes. The kit's XML calendar defines Monday–Friday, 08:00–12:00 and 13:00–17:00, 8 hours per day (480 min). Project applies that calendar when calculating finish dates. The start date is fixed — it is not relative to today.
+  </Step>
+
+  <Step title="Create the schedule">
+    Pass the example plan to `Project-Codex.ps1` with `-Action Create`. The default `-CreationMode Xml` imports all tasks in a single bulk operation:
+
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Project-Codex.ps1" `
+      -Action Create `
+      -CreationMode Xml `
+      -PlanPath  "$skillDir\examples\plan.json" `
+      -OutputPath "$runDir\base.mpp" `
+      -ReportPath "$runDir\create.json"
+
+    if ($LASTEXITCODE -ne 0) { throw 'Review the error report; do not repeat a mutation blindly.' }
+    ```
+
+    The script creates `base.mpp`, reopens it in read mode, compares the persisted values against what was requested, and writes the verification result to `create.json`. A successful report looks like:
+
+    ```json
+    {
+      "Result": "PASS",
+      "RequestedValuesVerified": true,
+      "ReopenedVerified": true,
+      "OriginalSnapshotUnchanged": true,
+      "SourceFileUnchanged": null,
+      "OutputPath": "C:\\...\\runs\\demo-...\\base.mpp",
+      "SHA256": "a3f9...",
+      "VerifiedUtc": "2026-10-13T10:22:05Z"
+    }
+    ```
+
+    `ReopenedVerified: true` means the file was closed, reopened, and the fields matched. `OriginalSnapshotUnchanged: true` means the document that was active before the script ran was not modified.
+
+    <Warning>
+      Do not re-run a create or update command automatically after a failure. Read the error report first. Blind retries can produce multiple output files or leave Project in an unexpected state.
+    </Warning>
+  </Step>
+
+  <Step title="Export a full-resolution image">
+    Once you have a verified `.mpp`, export a complete table+Gantt PNG in one command. The exporter opens its own copy of the file, selects all tasks (including those off screen), triggers Project's native GIF export, converts the GIF to PNG with pixel-perfect fidelity, and restores the previous document:
+
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Export-ProjectImage.ps1" `
+      -ProjectPath    "$runDir\base.mpp" `
+      -OutputDirectory "$runDir\image" `
+      -Mode TableAndGantt
+
+    if ($LASTEXITCODE -ne 0) { throw 'Review the export error.' }
+    ```
+
+    Use `-Mode Table` to produce a table-only image. The output directory will contain a `.gif`, a `.png`, and an export report. Open the PNG and verify that all task rows are visible, column headers are readable, and no unrelated window content appears in the image.
+
+    <Note>
+      GIF is the intermediate format produced by Project's native exporter. The PNG is a lossless conversion verified by pixel hash — no scaling or recompression is applied. If Project reduced the GIF color depth during export, the PNG reflects that same limitation.
+    </Note>
+  </Step>
+
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## What to do next
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+After your first successful run you have a verified `.mpp`, a `PASS` report, and a PNG image — all in a timestamped `runs/` folder. From here you can:
+
+<CardGroup cols={2}>
+  <Card title="Edit an existing schedule" icon="pen-to-square" href="/guides/edit-schedule">
+    Use `UpdateCopy` with a `updates.json` file to change task names, durations, or progress on a copy of any `.mpp`.
+  </Card>
+  <Card title="Export a data table" icon="table" href="/guides/export-tables">
+    Run `Export-ProjectTable.ps1` to produce a CSV and Markdown table from a verified report without re-opening Project.
+  </Card>
+</CardGroup>

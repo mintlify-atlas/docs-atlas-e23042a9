@@ -1,0 +1,80 @@
+---
+title: "MsProject2019 Agent Kit: AI-Driven Project Automation"
+sidebarTitle: "Introduction"
+description: "A reproducible PowerShell toolkit that lets Codex and AI agents create, edit, and export Microsoft Project 2019 schedules via XML, COM, and GDI — no API key required."
+---
+
+MsProject2019 Agent Kit is an open-source PowerShell toolkit that gives Codex and other AI agents a structured, reproducible way to automate Microsoft Project 2019 on Windows. Instead of rediscovering COM quirks or writing one-off bridge scripts, agents follow a tested skill that handles schedule creation, data editing, table export, and full-resolution image generation — all without requiring an API key, VBA macros, Office add-ins, or any Python package for core operations.
+
+## What the kit does
+
+The kit targets four classes of operation. Each maps to a specific script and verification mode:
+
+| Operation | Description | Primary script |
+|-----------|-------------|---------------|
+| **Inspect** | Read tasks, durations, dates, progress, links, milestones, and constraints from the active document | `Project-Codex.ps1 -Action Inspect` |
+| **Create** | Build a new schedule from a JSON plan using bulk XML import; Project calculates dates and saves the `.mpp` | `Project-Codex.ps1 -Action Create` |
+| **UpdateCopy** | Apply name, duration, or progress changes to a _copy_ of an existing `.mpp`; source file is never touched | `Project-Codex.ps1 -Action UpdateCopy` |
+| **Export** | Produce a full-length table image (GIF → PNG), a table+Gantt image, a CSV, or a Markdown table | `Export-ProjectImage.ps1`, `Export-ProjectTable.ps1` |
+
+Every mutating operation ends with a reopened verification: the script closes the result, reopens it in read mode, and compares persisted fields against what was requested. A report is only marked `Result: PASS` when that comparison succeeds.
+
+## The three technology layers
+
+The kit stacks three complementary technologies, each chosen to solve a specific limitation:
+
+<CardGroup cols={3}>
+  <Card title="XML (bulk)" icon="code">
+    Schedules are created by importing a single Project XML document. Project parses the file, applies its own calendar logic, and saves the `.mpp`. This is faster and more reliable than issuing one COM call per task.
+  </Card>
+  <Card title="COM (targeted)" icon="plug">
+    Targeted edits — changing a task name, duration, or percent-complete — are applied via COM automation (`MSProject.Application`). The kit uses `InvokeMember`-based reflection wrappers that work even when direct property access fails.
+  </Card>
+  <Card title="GDI capture" icon="image">
+    When a screenshot of the visible application window is needed, a GDI helper captures exactly what is on screen. For full-length table images, the kit uses Project's native GIF exporter instead — avoiding the scroll-and-stitch problem entirely.
+  </Card>
+</CardGroup>
+
+## What the kit does NOT support
+
+The toolkit is intentionally scoped. The following areas require extending and re-validating the scripts before use:
+
+- **Resources and cost tracking** — task assignments, resource calendars, and budget fields are not written or read
+- **Baselines** — baseline fields are not set, compared, or exported
+- **VBA macros** — no macro is recorded, triggered, or relied upon
+- **Special calendars** — complex exception calendars beyond the default Monday–Friday, 8 h/day are not tested
+- **Subprojects and external links** — cross-file dependencies are not resolved
+- **Saved view designs in the MPP** — the exporter uses a temporary table; custom view layouts stored in the file are not preserved
+
+<Note>
+  Claiming "100 % compatible with all Project files" based on a three-task fixture would be inaccurate. The scope above is what was validated. See [VALIDATION.md](https://github.com/Sigilo-dev/MsProject2019-Agent-Kit/blob/main/VALIDATION.md) for the exact test evidence.
+</Note>
+
+## Repository layout
+
+Understanding which file to read — and when — prevents agents from re-reading everything on every run.
+
+| File / folder | Audience and purpose |
+|---------------|----------------------|
+| `README.md` | **People** — installation, scope, examples, requirements |
+| `AGENTS.md` | **Codex** when working in this folder — brief operating rules and the operational entry point |
+| `.agents/skills/project2019-automation/SKILL.md` | **Agents** — choose and execute the correct workflow |
+| `references/` inside the skill | On-demand details: input formats, COM workflow, tables, captures, and error table |
+| `scripts/` inside the skill | Reusable implementations; prevents each AI session from writing a new COM bridge |
+| `examples/` inside the skill | Synthetic JSON for create and update operations |
+| `runs/` | Local results only — excluded from Git by default; never publish as repo examples |
+
+<Tip>
+  The skill is self-contained. Copy the entire `.agents/skills/project2019-automation/` directory into another project to bring all scripts, references, and examples with it. Copying only `SKILL.md` leaves the scripts behind.
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Clone the repo, verify your environment, and create your first schedule end-to-end in under five minutes.
+  </Card>
+  <Card title="System Requirements" icon="circle-check" href="/requirements">
+    Check the exact Windows, PowerShell, and Project prerequisites before running any script.
+  </Card>
+</CardGroup>

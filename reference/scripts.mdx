@@ -1,0 +1,287 @@
+---
+title: "Script reference for MsProject2019 Agent Kit"
+sidebarTitle: "Scripts"
+description: "Complete parameter reference for every public PowerShell script in the Agent Kit: required vs optional params, valid values, and usage examples."
+---
+
+The MsProject2019 Agent Kit exposes seven public scripts. Each one is a self-contained PowerShell file that communicates with Microsoft Project 2019 over COM, reads or writes JSON, and returns a structured JSON result on stdout. Helper modules (`ProjectCom.ps1`, `ProjectSnapshot.ps1`, `ProjectXml.ps1`) are dot-sourced automatically by the scripts that need them and are not called directly.
+
+<Note>
+Every script must be invoked with Windows PowerShell 5.1 in STA mode. Use the following invocation pattern for all scripts:
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -STA -File "C:\path\to\ScriptName.ps1" -Param1 Value1
+```
+
+Running with `pwsh` (PowerShell 7+) or without `-STA` causes an immediate error. Retry is safe only when no mutation has occurred.
+</Note>
+
+---
+
+## Project-Codex.ps1
+
+The main orchestrator. Connects to the running Project 2019 COM instance and performs one of three actions: inspecting the active project, creating a new schedule from a JSON plan, or copying an existing schedule and applying field updates. On success it prints a JSON report and optionally writes it to `-ReportPath`.
+
+<ParamField path="-Action" type="string" default="Inspect">
+  The operation to perform. One of `Inspect`, `Create`, or `UpdateCopy`.
+
+  - **`Inspect`** — reads the active project and returns a snapshot. No files are written unless `-ReportPath` is provided.
+  - **`Create`** — validates a plan JSON and creates a new `.mpp` file at `-OutputPath`.
+  - **`UpdateCopy`** — copies `-SourcePath` to `-OutputPath` and applies field updates from the plan JSON.
+</ParamField>
+
+<ParamField path="-PlanPath" type="string">
+  Path to the JSON file containing the plan (`Create`) or updates (`UpdateCopy`). Required when `-Action` is `Create` or `UpdateCopy`.
+</ParamField>
+
+<ParamField path="-OutputPath" type="string">
+  Absolute or relative path for the new `.mpp` file. Must not already exist; overwriting is disabled. Required when `-Action` is `Create` or `UpdateCopy`.
+</ParamField>
+
+<ParamField path="-SourcePath" type="string">
+  Path to the existing `.mpp` file to copy before applying updates. Required when `-Action` is `UpdateCopy`. The source file must be saved (`Saved=true`) and its SHA-256 hash is verified both before and after the operation.
+</ParamField>
+
+<ParamField path="-ReportPath" type="string">
+  Optional path where the JSON report is written. Must end with `.json`, must not already exist, and its parent directory must exist. When omitted the report is printed to stdout only.
+</ParamField>
+
+<ParamField path="-ExpectedActiveProjectPath" type="string">
+  Optional guard: the script throws if the currently active project's full path does not match this value. Use it to prevent accidental mutation of the wrong file.
+</ParamField>
+
+<ParamField path="-CreationMode" type="string" default="Xml">
+  Controls how tasks are created when `-Action Create` is used. One of `Xml` or `Com`.
+
+  - **`Xml`** (default) — writes an MSXML interchange file, imports it as a new project, and then saves as `.mpp`. Faster; uses an explicit Monday–Friday 8 h/day calendar.
+  - **`Com`** — creates tasks one by one via COM `Tasks.Add`, using Project's current defaults.
+</ParamField>
+
+<CodeGroup>
+```powershell Inspect
+powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Project-Codex.ps1" `
+  -Action Inspect `
+  -ReportPath "C:\results\inspect.json"
+```
+
+```powershell Create (Xml mode)
+powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Project-Codex.ps1" `
+  -Action Create `
+  -PlanPath "C:\plans\plan.json" `
+  -OutputPath "C:\results\schedule.mpp" `
+  -ReportPath "C:\results\create-report.json"
+```
+
+```powershell UpdateCopy
+powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Project-Codex.ps1" `
+  -Action UpdateCopy `
+  -SourcePath "C:\projects\original.mpp" `
+  -PlanPath "C:\plans\updates.json" `
+  -OutputPath "C:\results\updated.mpp" `
+  -ReportPath "C:\results\update-report.json"
+```
+</CodeGroup>
+
+---
+
+## Export-ProjectImage.ps1
+
+Opens a read-only rendering copy of a `.mpp` file, applies a custom table, selects the desired tasks, and exports a native GIF that is then converted to a lossless PNG. The result directory is always new; existing directories are never overwritten.
+
+<ParamField path="-ProjectPath" type="string" required>
+  Path to an existing, saved `.mpp` file. The file is never modified; the script creates an internal copy for rendering.
+</ParamField>
+
+<ParamField path="-OutputDirectory" type="string" required>
+  Path to a directory that must not yet exist. The script creates it and writes `render-<guid>.mpp`, `project.gif`, `project.png`, and `export.json` inside it.
+</ParamField>
+
+<ParamField path="-Mode" type="string" default="TableAndGantt">
+  Rendering mode. One of `Table` or `TableAndGantt`.
+
+  - **`Table`** — exports only the task table columns; no Gantt bars.
+  - **`TableAndGantt`** — exports the task table plus Gantt bars. Requires all selected tasks to have valid start and finish dates.
+</ParamField>
+
+<ParamField path="-OptionsPath" type="string">
+  Optional path to a JSON file that customises the export. Supported keys are `taskUniqueIds`, `columns`, `fromDate`, and `toDate`. Any other key causes an error. See [Input Formats](/reference/input-formats) for the full schema.
+</ParamField>
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Export-ProjectImage.ps1" `
+  -ProjectPath "C:\projects\schedule.mpp" `
+  -OutputDirectory "C:\exports\run-001" `
+  -Mode TableAndGantt `
+  -OptionsPath "C:\plans\image-options.json"
+```
+
+---
+
+## Export-ProjectTable.ps1
+
+Reads a `PASS` report written by `Project-Codex.ps1` and exports the embedded task snapshot as a UTF-8 CSV and a GitHub-flavoured Markdown table. No COM connection is required; the script is pure PowerShell.
+
+<ParamField path="-ReportPath" type="string" required>
+  Path to an existing JSON report produced by `Project-Codex.ps1` with `Result: "PASS"`. The file must contain a `Project.Tasks` array.
+</ParamField>
+
+<ParamField path="-OutputDirectory" type="string" required>
+  Path to a directory. Created automatically if it does not exist. Fails if `tasks.csv` or `tasks.md` already exist inside it.
+</ParamField>
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Export-ProjectTable.ps1" `
+  -ReportPath "C:\results\create-report.json" `
+  -OutputDirectory "C:\exports\tables"
+```
+
+---
+
+## Project-View.ps1
+
+Opens a `.mpp` file in read-only mode for inspection and later restores the previous active document. Writes a session journal (a small JSON file) that tracks the view state so that `Restore` can cleanly undo the `Open`. Useful before a `Guardar-Captura-Project.ps1` screen capture.
+
+<ParamField path="-Action" type="string" required>
+  Must be `Open` or `Restore`.
+
+  - **`Open`** — opens the target file read-only, sets it as active, and writes a new session journal.
+  - **`Restore`** — reads the session journal, verifies the file hash is unchanged, closes the helper-opened file (if applicable), and re-activates the original project.
+</ParamField>
+
+<ParamField path="-ProjectPath" type="string">
+  Path to the `.mpp` file to open. Required when `-Action Open`. Ignored when `-Action Restore` (the path is read from the session journal).
+</ParamField>
+
+<ParamField path="-SessionPath" type="string" required>
+  Path to the session journal JSON file.
+
+  - `Open` — must not exist yet; its parent directory must exist.
+  - `Restore` — must be an existing journal with `Status: "Open"` and a matching `ProcessId`.
+</ParamField>
+
+<CodeGroup>
+```powershell Open
+powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Project-View.ps1" `
+  -Action Open `
+  -ProjectPath "C:\projects\schedule.mpp" `
+  -SessionPath "C:\sessions\view-session.json"
+```
+
+```powershell Restore
+powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Project-View.ps1" `
+  -Action Restore `
+  -SessionPath "C:\sessions\view-session.json"
+```
+</CodeGroup>
+
+<Warning>
+If the session journal is left in `Status: "Opening"` state it means the open attempt may have partially succeeded. Inspect the list of open projects before retrying or running `Restore`.
+</Warning>
+
+---
+
+## Guardar-Captura-Project.ps1
+
+Captures the foreground window as a lossless PNG using the Windows GDI `CopyFromScreen` API. The window must belong to a `WINPROJ` process and must be in the foreground at the moment the script runs. Does not use any accessibility or automation API.
+
+<ParamField path="-OutputPath" type="string" required>
+  Destination path for the PNG file. Must end with `.png` and must not already exist.
+</ParamField>
+
+<ParamField path="-ExpectedTitle" type="string" default="">
+  Optional substring that must appear in the foreground window's title. If provided and the title does not match, the script throws without saving any image.
+</ParamField>
+
+<ParamField path="-WindowHandle" type="long" default="0">
+  Optional Win32 window handle (`HWND`). When `0` (the default), the script uses `GetForegroundWindow()`. When non-zero, the supplied handle must be the current foreground window, otherwise the script throws.
+</ParamField>
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Guardar-Captura-Project.ps1" `
+  -OutputPath "C:\captures\gantt-view.png" `
+  -ExpectedTitle "schedule.mpp"
+```
+
+<Note>
+The script calls `SetProcessDPIAware` before reading window bounds, so coordinates are in physical pixels on high-DPI displays. If the capture comes out black or shows the wrong content, verify that the correct Project window is in the foreground and that no overlapping window or screensaver is present.
+</Note>
+
+---
+
+## Convert-ProjectGifToPng.ps1
+
+Converts the single-frame GIF produced by `Export-ProjectImage.ps1` to a lossless PNG using GDI+. Verifies that the GIF is not animated, that pixel dimensions match after conversion, and that the ARGB SHA-256 hash of both images is identical before returning.
+
+<ParamField path="-InputPath" type="string" required>
+  Path to an existing single-frame `.gif` file. Animated GIFs are explicitly rejected to prevent silent frame loss.
+</ParamField>
+
+<ParamField path="-OutputPath" type="string" required>
+  Destination path for the converted `.png` file. Must not already exist.
+</ParamField>
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Convert-ProjectGifToPng.ps1" `
+  -InputPath "C:\exports\run-001\project.gif" `
+  -OutputPath "C:\exports\run-001\project.png"
+```
+
+<Tip>
+`Export-ProjectImage.ps1` calls this script automatically. Invoke it directly only when you need to re-convert a GIF from a previous export run or when debugging a conversion failure.
+</Tip>
+
+---
+
+## Test-ProjectEnvironment.ps1
+
+Validates that the PowerShell environment, COM registration, and Project application state are all correct for the Agent Kit. Takes no parameters. Prints a `READY` JSON object or throws a descriptive error.
+
+This script is the recommended first step in any new session and after any crash or COM reconnection.
+
+<Accordion title="JSON output fields">
+  <ResponseField name="Result" type="string">
+    Always `"READY"` on success.
+  </ResponseField>
+  <ResponseField name="PowerShell" type="string">
+    The full version string of the running PowerShell host (e.g. `"5.1.19041.5848"`).
+  </ResponseField>
+  <ResponseField name="Apartment" type="string">
+    The COM apartment state of the current thread. Must be `"STA"` for all COM operations.
+  </ResponseField>
+  <ResponseField name="Is64BitProcess" type="boolean">
+    Whether the PowerShell process is 64-bit. Relevant for COM interop compatibility.
+  </ResponseField>
+  <ResponseField name="ApplicationVersion" type="string">
+    The value of `Application.Version` from the live Project COM object (e.g. `"16.0"`).
+  </ResponseField>
+  <ResponseField name="OpenProjects" type="integer">
+    The number of projects currently open in the Application.Projects collection.
+  </ResponseField>
+  <ResponseField name="ActiveProject" type="string">
+    The full path of the currently active project document.
+  </ResponseField>
+  <ResponseField name="Saved" type="boolean">
+    Whether the active project reports `Saved = true`.
+  </ResponseField>
+  <ResponseField name="TaskCount" type="integer">
+    The number of tasks in the active project's Tasks collection.
+  </ResponseField>
+</Accordion>
+
+```powershell
+powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Test-ProjectEnvironment.ps1"
+```
+
+```json Example output
+{
+  "Result": "READY",
+  "PowerShell": "5.1.19041.5848",
+  "Apartment": "STA",
+  "Is64BitProcess": true,
+  "ApplicationVersion": "16.0",
+  "OpenProjects": 1,
+  "ActiveProject": "C:\\projects\\schedule.mpp",
+  "Saved": true,
+  "TaskCount": 5
+}
+```

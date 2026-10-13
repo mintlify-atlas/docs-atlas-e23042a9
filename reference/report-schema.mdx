@@ -1,0 +1,409 @@
+---
+title: "Verification report schema and field reference"
+sidebarTitle: "Report Schema"
+description: "Field-by-field reference for every JSON report emitted by Project-Codex, Export-ProjectImage, Export-ProjectTable, and Test-ProjectEnvironment scripts."
+---
+
+Every script in the Agent Kit writes a structured JSON report to stdout (and optionally to a file) when it completes successfully. This page documents the shape and meaning of every field in each report type. Reports are UTF-8 without BOM, produced atomically with `FileMode.CreateNew` so they never overwrite existing files.
+
+<Note>
+A report file is only written when the script exits successfully. A non-zero exit code means no report was created. When `-ReportPath` is provided to `Project-Codex.ps1`, the report is written there; for `Export-ProjectImage.ps1` the report is always written as `export.json` inside `-OutputDirectory`.
+</Note>
+
+---
+
+## Project-Codex.ps1 — Inspect report
+
+Returned when `-Action Inspect`. Contains a snapshot of the currently active project; no files are created or modified.
+
+<ResponseField name="Version" type="string">
+  The value of `Application.Version` from the live COM object. Example: `"16.0"`.
+</ResponseField>
+
+<ResponseField name="Project" type="object">
+  A full project snapshot object. See the [Project snapshot](#project-snapshot) section below for all fields.
+</ResponseField>
+
+---
+
+## Project-Codex.ps1 — PASS report (Create / UpdateCopy)
+
+Returned when `-Action Create` or `-Action UpdateCopy` completes all verification steps.
+
+<ResponseField name="Result" type="string">
+  Always `"PASS"` on success.
+</ResponseField>
+
+<ResponseField name="Action" type="string">
+  The action that was performed: `"Create"` or `"UpdateCopy"`.
+</ResponseField>
+
+<ResponseField name="Version" type="string">
+  `Application.Version` from the COM object.
+</ResponseField>
+
+<ResponseField name="CreationMode" type="string | null">
+  `"Xml"` or `"Com"` when `Action` is `"Create"`. `null` when `Action` is `"UpdateCopy"`.
+</ResponseField>
+
+<ResponseField name="VerifiedUtc" type="string">
+  UTC timestamp of the verification step in ISO 8601 format (`"2026-10-13T14:22:05.1234567Z"`). Present times to the user in their local timezone as needed.
+</ResponseField>
+
+<ResponseField name="Output" type="string">
+  Absolute path of the written `.mpp` file.
+</ResponseField>
+
+<ResponseField name="ReopenedVerified" type="boolean">
+  `true` when the file was closed and reopened in read-only mode, and the persisted task data matched the post-save snapshot field by field.
+</ResponseField>
+
+<ResponseField name="RequestedValuesVerified" type="boolean">
+  `true` when every field specified in the plan or updates object was confirmed in the live snapshot after saving.
+</ResponseField>
+
+<ResponseField name="OriginalSnapshotUnchanged" type="boolean">
+  `true` when the observed fields of the previously active project match the snapshot taken before the operation began.
+</ResponseField>
+
+<ResponseField name="SourceFileUnchanged" type="boolean | null">
+  `true` when the SHA-256 of the source `.mpp` file (`UpdateCopy`) is identical before and after the operation. `null` for `Create` operations, which have no source file.
+</ResponseField>
+
+<ResponseField name="SHA256" type="string">
+  Uppercase hex SHA-256 hash of the written output `.mpp` file.
+</ResponseField>
+
+<ResponseField name="Project" type="object">
+  Snapshot of the verified output project (read from the reopened read-only copy). See [Project snapshot](#project-snapshot).
+</ResponseField>
+
+---
+
+## Project snapshot object
+
+Embedded in Inspect and PASS reports as the `Project` field.
+
+<ResponseField name="Name" type="string">
+  The project's file name without path (session metadata; excluded from persisted comparisons).
+</ResponseField>
+
+<ResponseField name="FullName" type="string">
+  Absolute path to the `.mpp` file.
+</ResponseField>
+
+<ResponseField name="Saved" type="boolean">
+  Whether the project reported `Saved = true` at snapshot time. This is session metadata and is excluded from the reopened-verification comparison.
+</ResponseField>
+
+<ResponseField name="Start" type="string">
+  Project start date as returned by `Project.ProjectStart` — a local representation, not UTC.
+</ResponseField>
+
+<ResponseField name="HoursPerDay" type="number">
+  Working hours per day from `Project.HoursPerDay`. Example: `8.0`.
+</ResponseField>
+
+<ResponseField name="MinutesPerDayConversion" type="number">
+  `60 × HoursPerDay`. Use this value to convert between working days and minutes for this specific project. Do not assume 480 for files you did not create.
+</ResponseField>
+
+<ResponseField name="TaskCount" type="integer">
+  Number of non-null, non-summary-root tasks. Excludes the UID-0 project-summary row.
+</ResponseField>
+
+<ResponseField name="Tasks" type="array">
+  Array of task row objects. See [Task row fields](#task-row-fields) below.
+</ResponseField>
+
+---
+
+## Task row fields
+
+Each object inside `Project.Tasks[]`.
+
+<ResponseField name="ID" type="integer">
+  Positional row ID. May change if tasks are reordered.
+</ResponseField>
+
+<ResponseField name="UniqueID" type="integer">
+  Permanent unique identifier for the task within the project file. Use this value in `UpdateCopy` update objects and in `Export-ProjectImage.ps1 -OptionsPath taskUniqueIds`.
+</ResponseField>
+
+<ResponseField name="Name" type="string">
+  Task display name.
+</ResponseField>
+
+<ResponseField name="Duration" type="number">
+  Working duration in minutes.
+</ResponseField>
+
+<ResponseField name="Predecessors" type="string">
+  Normalized predecessor string. Comma-separated row IDs. Links that are not Finish-to-Start or that have non-zero lag append the type code (`FF`, `FS`, `SF`, `SS`) and the lag in minutes (e.g. `"2FS+30min"`). Not a literal copy of the localized cell value.
+</ResponseField>
+
+<ResponseField name="PercentComplete" type="integer">
+  Task completion percentage, `0` to `100`.
+</ResponseField>
+
+<ResponseField name="Manual" type="boolean">
+  `true` if the task is manually scheduled. All tasks created by the Agent Kit have `Manual = false`.
+</ResponseField>
+
+<ResponseField name="Start" type="string">
+  Calculated start date in ISO 8601 format, or `"NA"` if the task is unscheduled.
+</ResponseField>
+
+<ResponseField name="Finish" type="string">
+  Calculated finish date in ISO 8601 format, or `"NA"` if the task is unscheduled.
+</ResponseField>
+
+<ResponseField name="Summary" type="boolean">
+  `true` if the task is a summary (parent) task.
+</ResponseField>
+
+<ResponseField name="Milestone" type="boolean">
+  `true` if the task is a milestone (typically `Duration = 0`).
+</ResponseField>
+
+<ResponseField name="ConstraintType" type="integer">
+  Constraint type integer from the `PjConstraint` enumeration. `0` = As Soon As Possible. See the [Microsoft documentation](https://learn.microsoft.com/en-us/office/vba/api/project.pjconstraint) for all values.
+</ResponseField>
+
+<ResponseField name="ConstraintDate" type="string">
+  The constraint date in ISO 8601, or `"NA"` if no constraint date applies.
+</ResponseField>
+
+<ResponseField name="Estimated" type="boolean">
+  `true` if Project has marked the duration as estimated (shown with a `?` in the UI).
+</ResponseField>
+
+<ResponseField name="PredecessorUniqueIDs" type="array">
+  Sorted array of `UniqueID` integers for all predecessor tasks.
+</ResponseField>
+
+<ResponseField name="Dependencies" type="array">
+  Structured predecessor links. Each entry is an object with `UniqueID` (integer), `Type` (integer, 0–3 for FF/FS/SF/SS), and `LagTenthsOfMinute` (integer). Sorted by UniqueID, then Type, then lag.
+</ResponseField>
+
+<ResponseField name="Critical" type="boolean">
+  `true` if Project has calculated this task as being on the critical path.
+</ResponseField>
+
+---
+
+## Export-ProjectImage.ps1 report
+
+Written to `export.json` inside the `-OutputDirectory`. Also printed to stdout.
+
+<ResponseField name="Result" type="string">
+  Always `"EXPORTED"` on success.
+</ResponseField>
+
+<ResponseField name="Mode" type="string">
+  `"Table"` or `"TableAndGantt"`.
+</ResponseField>
+
+<ResponseField name="Source" type="string">
+  Absolute path of the source `.mpp` file.
+</ResponseField>
+
+<ResponseField name="SourceSHA256" type="string">
+  SHA-256 hash of the source file before the export.
+</ResponseField>
+
+<ResponseField name="SourceFileUnchanged" type="boolean">
+  `true` when the source hash was identical before and after the export.
+</ResponseField>
+
+<ResponseField name="OriginalRestored" type="string">
+  Full path of the project that was active before the export; restored as the active document after the export completes.
+</ResponseField>
+
+<ResponseField name="RenderingCopy" type="string">
+  Absolute path of the temporary `.mpp` copy used for rendering (left on disk for diagnosis).
+</ResponseField>
+
+<ResponseField name="Columns" type="array">
+  Array of column descriptor objects used for this export (same schema as the `columns` image-option input).
+</ResponseField>
+
+<ResponseField name="Rows" type="integer">
+  Number of task rows included in the export.
+</ResponseField>
+
+<ResponseField name="SelectedUniqueIDs" type="array">
+  Array of `UniqueID` integers for the tasks that were selected and rendered.
+</ResponseField>
+
+<ResponseField name="SelectionVerified" type="boolean">
+  `true` when the IDs returned by `ActiveSelection` matched the requested `taskUniqueIds` (or all tasks when no filter was applied).
+</ResponseField>
+
+<ResponseField name="FirstTask" type="string">
+  Name of the first task in the rendered set.
+</ResponseField>
+
+<ResponseField name="LastTask" type="string">
+  Name of the last task in the rendered set.
+</ResponseField>
+
+<ResponseField name="FromDate" type="string | null">
+  ISO 8601 date-time of the Gantt range start used for the export. `null` when `Mode` is `"Table"`.
+</ResponseField>
+
+<ResponseField name="ToDate" type="string | null">
+  ISO 8601 date-time of the Gantt range end. `null` when `Mode` is `"Table"`.
+</ResponseField>
+
+<ResponseField name="Gif" type="string">
+  Absolute path of the native GIF export (`project.gif`).
+</ResponseField>
+
+<ResponseField name="Png" type="string">
+  Absolute path of the converted PNG (`project.png`).
+</ResponseField>
+
+<ResponseField name="Width" type="integer">
+  Image width in pixels.
+</ResponseField>
+
+<ResponseField name="Height" type="integer">
+  Image height in pixels.
+</ResponseField>
+
+<ResponseField name="PixelIdentical" type="boolean">
+  `true` when the ARGB pixel hash of the GIF and the PNG are identical.
+</ResponseField>
+
+<ResponseField name="DecodedArgbSHA256" type="string">
+  Uppercase hex SHA-256 of the decoded ARGB pixel data, computed identically for the GIF and the PNG.
+</ResponseField>
+
+<ResponseField name="VisualReviewRequired" type="boolean">
+  Always `true`. The script cannot determine whether the image content is correct — a human or vision model must review the PNG before using it as evidence.
+</ResponseField>
+
+<ResponseField name="ElapsedSeconds" type="number">
+  Wall-clock seconds from script start to completion, rounded to two decimal places.
+</ResponseField>
+
+---
+
+## Export-ProjectTable.ps1 report
+
+<ResponseField name="Result" type="string">
+  Always `"EXPORTED"` on success.
+</ResponseField>
+
+<ResponseField name="Rows" type="integer">
+  Number of task rows written to the table.
+</ResponseField>
+
+<ResponseField name="Csv" type="string">
+  Absolute path of the written `tasks.csv` file (UTF-8 with BOM, for Excel compatibility).
+</ResponseField>
+
+<ResponseField name="Markdown" type="string">
+  Absolute path of the written `tasks.md` file (UTF-8 without BOM, GitHub-Flavoured Markdown table).
+</ResponseField>
+
+---
+
+## Test-ProjectEnvironment.ps1 report
+
+<ResponseField name="Result" type="string">
+  Always `"READY"` on success.
+</ResponseField>
+
+<ResponseField name="PowerShell" type="string">
+  Full PowerShell version string of the host process.
+</ResponseField>
+
+<ResponseField name="Apartment" type="string">
+  COM apartment state of the current thread (`"STA"` is required).
+</ResponseField>
+
+<ResponseField name="Is64BitProcess" type="boolean">
+  Whether the PowerShell process is 64-bit.
+</ResponseField>
+
+<ResponseField name="ApplicationVersion" type="string">
+  `Application.Version` from the live Project COM object.
+</ResponseField>
+
+<ResponseField name="OpenProjects" type="integer">
+  Count of projects in the `Application.Projects` collection.
+</ResponseField>
+
+<ResponseField name="ActiveProject" type="string">
+  Full path of the currently active project.
+</ResponseField>
+
+<ResponseField name="Saved" type="boolean">
+  Whether the active project is currently saved.
+</ResponseField>
+
+<ResponseField name="TaskCount" type="integer">
+  Task count in the active project's Tasks collection.
+</ResponseField>
+
+---
+
+## Sample PASS report (Create)
+
+```json
+{
+  "Result": "PASS",
+  "Action": "Create",
+  "Version": "16.0",
+  "CreationMode": "Xml",
+  "VerifiedUtc": "2026-10-13T14:22:05.1234567Z",
+  "Output": "C:\\results\\schedule.mpp",
+  "ReopenedVerified": true,
+  "RequestedValuesVerified": true,
+  "OriginalSnapshotUnchanged": true,
+  "SourceFileUnchanged": null,
+  "SHA256": "A1B2C3D4E5F6...",
+  "Project": {
+    "Name": "schedule.mpp",
+    "FullName": "C:\\results\\schedule.mpp",
+    "Saved": true,
+    "Start": "10/12/2026",
+    "HoursPerDay": 8.0,
+    "MinutesPerDayConversion": 480.0,
+    "TaskCount": 3,
+    "Tasks": [
+      {
+        "ID": 1, "UniqueID": 1, "Name": "Preparacion",
+        "Duration": 480, "Predecessors": "", "PercentComplete": 0,
+        "Manual": false, "Start": "2026-10-12T08:00:00",
+        "Finish": "2026-10-12T17:00:00", "Summary": false,
+        "Milestone": false, "ConstraintType": 0, "ConstraintDate": "NA",
+        "Estimated": false, "PredecessorUniqueIDs": [],
+        "Dependencies": [], "Critical": true
+      },
+      {
+        "ID": 2, "UniqueID": 2, "Name": "Ejecucion",
+        "Duration": 960, "Predecessors": "1", "PercentComplete": 0,
+        "Manual": false, "Start": "2026-10-13T08:00:00",
+        "Finish": "2026-10-14T17:00:00", "Summary": false,
+        "Milestone": false, "ConstraintType": 0, "ConstraintDate": "NA",
+        "Estimated": false, "PredecessorUniqueIDs": [1],
+        "Dependencies": [{"UniqueID": 1, "Type": 1, "LagTenthsOfMinute": 0}],
+        "Critical": true
+      },
+      {
+        "ID": 3, "UniqueID": 3, "Name": "Revision",
+        "Duration": 480, "Predecessors": "2", "PercentComplete": 0,
+        "Manual": false, "Start": "2026-10-15T08:00:00",
+        "Finish": "2026-10-15T17:00:00", "Summary": false,
+        "Milestone": false, "ConstraintType": 0, "ConstraintDate": "NA",
+        "Estimated": false, "PredecessorUniqueIDs": [2],
+        "Dependencies": [{"UniqueID": 2, "Type": 1, "LagTenthsOfMinute": 0}],
+        "Critical": true
+      }
+    ]
+  }
+}
+```

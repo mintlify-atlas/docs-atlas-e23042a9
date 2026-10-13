@@ -1,0 +1,126 @@
+---
+title: "Export task data tables to CSV and Markdown output"
+sidebarTitle: "Export Tables"
+description: "Generate a UTF-8 CSV and a safe Markdown table from a verified Project-Codex JSON report without reopening the .mpp or recalculating any dates."
+---
+
+After a `Create` or `UpdateCopy` run produces a `PASS` report, you already have a verified snapshot of every task's fields. `Export-ProjectTable.ps1` reads that snapshot directly and writes two plain-text files: a comma-separated CSV suitable for spreadsheet import and a Markdown table safe to embed in reports or render in documentation. No COM connection, no running Project instance, and no recalculation of dates are needed—the report is the single source of truth.
+
+## How it works
+
+The script reads the `Project.Tasks` array from the JSON report, maps each task to a row with eight fixed columns, and writes `tasks.csv` and `tasks.md` into the output directory you specify. It refuses to overwrite existing files and creates the directory if it does not yet exist.
+
+<Steps>
+  <Step title="Locate your PASS report">
+    Every successful `Project-Codex.ps1` run writes a JSON report with `"Result": "PASS"`. Point `-ReportPath` at that file. The script rejects reports with any other `Result` value.
+
+    ```powershell
+    $scripts   = Join-Path $PWD.Path '.agents\skills\project2019-automation\scripts'
+    $reportPath = 'C:\Projects\runs\run-01\update.json'
+    $tableDir   = 'C:\Projects\runs\run-01\table'
+    ```
+  </Step>
+
+  <Step title="Run the export">
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Export-ProjectTable.ps1" `
+      -ReportPath     $reportPath `
+      -OutputDirectory $tableDir
+    if ($LASTEXITCODE -ne 0) { throw 'Table export failed. Check the report path and output directory.' }
+    ```
+
+    On success the script prints a JSON summary to stdout:
+
+    ```json
+    {
+      "Result": "EXPORTED",
+      "Rows": 12,
+      "Csv": "C:\\Projects\\runs\\run-01\\table\\tasks.csv",
+      "Markdown": "C:\\Projects\\runs\\run-01\\table\\tasks.md"
+    }
+    ```
+  </Step>
+
+  <Step title="Review the output files">
+    Open `tasks.csv` or `tasks.md` and confirm the row count matches what you expect from the report. For a quick Markdown check, render `tasks.md` in any Markdown viewer—the table should display without broken pipes or stray HTML entities.
+  </Step>
+</Steps>
+
+## Columns exported
+
+Both output files contain the same eight columns, derived directly from the snapshot fields:
+
+| Column | Source field | Notes |
+| --- | --- | --- |
+| `ID` | `Task.ID` | Row position at time of snapshot |
+| `UniqueID` | `Task.UniqueID` | Stable task identity—use this for updates |
+| `Task` | `Task.Name` | Formula-safe in CSV; HTML-escaped in Markdown |
+| `DurationMinutes` | `Task.Duration` | Integer minutes as stored in the snapshot |
+| `Start` | `Task.Start` | Date string from Project |
+| `Finish` | `Task.Finish` | Date string from Project |
+| `Predecessors` | `Task.Predecessors` | Comma-separated predecessor IDs, if any |
+| `PercentComplete` | `Task.PercentComplete` | Integer 0–100 |
+
+<Note>
+  Duration is exported in **minutes** as the kit stores it, not in the display unit shown in Project's interface. To convert: divide by 60 for hours, or divide by the project's hours-per-day value for days. Read `HoursPerDay` from the `Project` object in the report to avoid assuming a fixed 8-hour day.
+</Note>
+
+## Encoding and escaping rules
+
+**CSV (`tasks.csv`)** is written as UTF-8 with BOM so that Excel on Windows recognizes the encoding automatically. The separator is a comma. Values that begin with `=`, `+`, `@`, `-`, a tab, or a line break are prefixed with a single quote to prevent formula injection when the file is opened in a spreadsheet application. The `.mpp` is never modified.
+
+**Markdown (`tasks.md`)** escapes `&`, `<`, `>`, `|`, and line breaks so the table renders correctly in standard Markdown processors. Pipe characters within a task name become `&#124;`; embedded newlines become `<br>`. The file is UTF-8 without BOM.
+
+### Sample Markdown table row
+
+```markdown
+| ID | UniqueID | Task | Duration (min) | Start | Finish | Predecessors | Complete (%) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 3 | 7 | Design &amp; review | 480 | Mon 10/12/26 8:00 AM | Mon 10/12/26 5:00 PM | 2 | 25 |
+```
+
+<Tip>
+  If your region uses a separator other than a comma (e.g. semicolon), import `tasks.csv` into Excel using **Data → From Text/CSV** and set the delimiter to **Comma** explicitly. Do not alter the file itself—the format is fixed by the script.
+</Tip>
+
+## When to regenerate
+
+A report is a snapshot of the project at the moment it was produced. If the `.mpp` file has been modified—by a `UpdateCopy` run, a manual save, or any other change—generate a fresh report before exporting the table.
+
+<Tip>
+  If neither the `.mpp` nor the task selection has changed since your last `PASS` report, you can reuse that report and run `Export-ProjectTable.ps1` again pointing to a new `OutputDirectory`. You do not need to reopen Project or re-run `Inspect`.
+</Tip>
+
+The workflow for a changed file:
+
+```powershell
+# 1. Re-run Inspect to get a fresh snapshot
+powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Project-Codex.ps1" `
+  -Action Inspect `
+  -ExpectedActiveProjectPath 'C:\Projects\schedule.mpp' `
+  -ReportPath 'C:\Projects\runs\run-02\inspect.json'
+
+# 2. Export the table from the new report
+powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Export-ProjectTable.ps1" `
+  -ReportPath     'C:\Projects\runs\run-02\inspect.json' `
+  -OutputDirectory 'C:\Projects\runs\run-02\table'
+```
+
+## What the table does not contain
+
+The exported table covers the eight fields listed above. It does not include:
+
+<Accordion title="Fields not available in the exported table">
+  - **Calendars** — base and resource calendars, working-time exceptions, and holiday definitions
+  - **Resources** — resource names, types, assignments, units, or availability
+  - **Costs** — fixed costs, resource rates, actual costs, or budget fields
+  - **Baselines** — baseline start, finish, duration, work, or cost
+  - **Scheduling metadata** — constraint types and dates, task mode (auto/manual), estimated flag, or summary/milestone flags
+  - **Custom fields** — any enterprise or local custom fields defined in the project
+
+  For a richer snapshot, read the full `Project` object in the `PASS` report JSON, which includes `Summary`, `Milestone`, `Manual`, `ConstraintType`, `ConstraintDate`, `Estimated`, and `HoursPerDay` for each task.
+</Accordion>
+
+<Warning>
+  Do not use `tasks.csv` or `tasks.md` as a source to reconstruct or overwrite a `.mpp` file. The table does not preserve calendars, resource assignments, baselines, or scheduling constraints. Importing it as if it were a complete project definition will produce an incorrect schedule.
+</Warning>

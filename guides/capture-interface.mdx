@@ -1,0 +1,151 @@
+---
+title: "Capture the live Project window as a PNG screenshot"
+sidebarTitle: "Capture Interface"
+description: "Record a pixel-exact PNG of the visible Microsoft Project window using Windows GDI for interface state, dialog evidence, or before-and-after comparisons."
+---
+
+When a task requires photographic evidence of the Microsoft Project application itself—its toolbar state, an open dialog, a specific view layout, or a before-and-after comparison—the GDI capture workflow is the right tool. `Guardar-Captura-Project.ps1` uses `System.Drawing.Graphics.CopyFromScreen` to record exactly what is visible on-screen in the Project window at the moment of capture, and saves the result as a lossless PNG.
+
+This approach is intentionally different from the native image export described in [Export Images](/guides/export-images). Native export asks Project to render all task rows—including those off-screen—into a file without touching the display. GDI capture records the live display as-is, which means it is the right choice for interface evidence and the wrong choice as a substitute for a full task table when the project has more rows than fit in the window.
+
+<Warning>
+  GDI capture records the pixels that are visible on screen at the moment of capture. If any window—a notification, a dialog, a taskbar popup, or a console panel—overlaps the Project window, those pixels will appear in the PNG. The script cannot remove content from another window. Verify the image after every capture and recapture if unwanted content is present.
+</Warning>
+
+## Full capture workflow
+
+<Steps>
+  <Step title="Save and verify the project file">
+    Finish any `Create` or `UpdateCopy` operation and confirm a `PASS` report before capturing. Do not capture while a COM operation is still running. For a before-and-after comparison, capture the original file first with a name like `before.png`, restore the view, run your edit, then capture the result as `after.png`. Use distinct output paths for each stage.
+
+    ```powershell
+    $scripts = Join-Path $PWD.Path '.agents\skills\project2019-automation\scripts'
+    $runDir  = 'C:\Projects\runs\capture-01'
+    New-Item -ItemType Directory -Path $runDir | Out-Null
+    ```
+  </Step>
+
+  <Step title="Open the result in Project">
+    `Project-View.ps1 -Action Open` opens the target `.mpp` file in read-only mode (if it is not already open) and records ownership of that action in a session journal. The journal is used later by `Restore` to close only what this helper opened.
+
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Project-View.ps1" `
+      -Action      Open `
+      -ProjectPath 'C:\Projects\runs\run-01\edited.mpp' `
+      -SessionPath "$runDir\view.json"
+    if ($LASTEXITCODE -ne 0) { throw 'Could not open the project for viewing.' }
+    ```
+
+    The session JSON is created in `Opening` state and updated to `Open` once the file is confirmed active. Leave it in your `runs/` folder—it contains local paths and should not be committed to the repository.
+  </Step>
+
+  <Step title="Activate the Project window">
+    The GDI capture helper reads the foreground window at the moment it runs. Project must be in the foreground—any other window on top will appear in the PNG.
+
+    **Using Computer Use:** Enumerate Project windows with the `sky` API, then activate the one whose title matches your file. Work in two separate cells to avoid relying on a stale handle:
+
+    ```javascript
+    // Cell 1 — enumerate windows
+    if (!globalThis.sky) {
+      const { sky } = await import('@oai/sky');
+      globalThis.sky = sky;
+    }
+    globalThis.projectWindows = (await sky.list_windows())
+      .filter(w => /winproj/i.test(w.app));
+    nodeRepl.write(JSON.stringify(projectWindows));
+    ```
+
+    ```javascript
+    // Cell 2 — activate the correct window (replace title with what Cell 1 returned)
+    globalThis.projectMatches = projectWindows.filter(
+      w => w.title === 'TITLE OBSERVED IN CELL 1'
+    );
+    if (projectMatches.length !== 1) throw new Error('Ambiguous window selection');
+    globalThis.projectWindow = projectMatches[0];
+    await sky.activate_window({ window: projectWindow });
+    ```
+
+    **Without Computer Use:** The user can bring Project to the foreground manually. Launch the capture script from a shell tool that runs in the background—opening a visible console window will steal focus from Project.
+  </Step>
+
+  <Step title="Run the capture script">
+    Execute `Guardar-Captura-Project.ps1` immediately after confirming Project is in the foreground. The script validates the window before writing any file.
+
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Guardar-Captura-Project.ps1" `
+      -OutputPath    "$runDir\after.png" `
+      -ExpectedTitle 'edited.mpp'
+    if ($LASTEXITCODE -ne 0) { throw 'Capture failed. Check that Project is in the foreground.' }
+    ```
+
+    On success the script prints a JSON result:
+
+    ```json
+    {
+      "Path":   "C:\\Projects\\runs\\capture-01\\after.png",
+      "Title":  "edited.mpp - Microsoft Project",
+      "Width":  1928,
+      "Height": 1048,
+      "Method": "Windows GDI screen capture"
+    }
+    ```
+
+    The script refuses to overwrite an existing PNG. Use a new `-OutputPath` for each capture.
+  </Step>
+
+  <Step title="Open the PNG and inspect it">
+    Open the PNG with your image viewer at full size. Confirm:
+
+    - The file name and stage match what you intended to capture.
+    - The task rows, column headers, and dates you need to evidence are visible and readable.
+    - The Gantt area (if visible) shows the expected bars and timeline.
+    - No dialog, notification, or content from another application is overlapping the content you need.
+    - No personal account information or unrelated content is visible if the image will be shared.
+
+    If the window was too narrow, or if a column is hidden outside the visible area, that column does not appear in the capture. Adjust the Project window and recapture; do not claim the PNG shows data that is not visible in the image.
+  </Step>
+
+  <Step title="Restore the previous document">
+    `Project-View.ps1 -Action Restore` reads the session journal, closes the file if the helper opened it, verifies the file hash has not changed, and reactivates the document that was open before the `Open` step.
+
+    ```powershell
+    powershell.exe -NoProfile -NonInteractive -STA -File "$scripts\Project-View.ps1" `
+      -Action      Restore `
+      -SessionPath "$runDir\view.json"
+    if ($LASTEXITCODE -ne 0) { throw 'Restore failed. Inspect Project state before continuing.' }
+    ```
+
+    If the file was already open before `Open` was called, `Restore` does not close it—the journal records that the helper did not own the opening. The journal is updated to `Restored` status and must not be reused after Project is restarted.
+  </Step>
+</Steps>
+
+## What the capture script validates
+
+Before writing a single pixel, `Guardar-Captura-Project.ps1` performs all of the following checks and throws a terminating error if any one fails:
+
+| Check | What fails it |
+| --- | --- |
+| `WINPROJ` process | No Microsoft Project instance is running |
+| Foreground window ownership | The foreground window does not belong to `WINPROJ` |
+| Expected title | `-ExpectedTitle` text is not contained in the window title |
+| Not minimized | The Project window is in a minimized (iconic) state |
+| Visible rectangle | The window is entirely outside the virtual desktop bounds |
+| Focus stability | The foreground window changes between the pre-capture check and the moment of writing |
+
+The check for focus stability is critical: if something steals focus between the validation step and the actual `CopyFromScreen` call, the script aborts and no PNG is written.
+
+## Using -WindowHandle for explicit targeting
+
+By default the script captures whichever window is in the foreground. If you have a specific window handle—obtained from `sky.list_windows()` via Computer Use—you can pass it with `-WindowHandle` to target that window explicitly. The script will still verify it is in the foreground before capturing; it will not capture a background window.
+
+<Note>
+  Window handles are valid only for the current session and can become stale if the Project application restarts or if the document is closed and reopened. Always read the handle immediately before use from a fresh `sky.list_windows()` call; do not copy a handle from a previous session or from documentation examples.
+
+  ```javascript
+  // Obtain a fresh handle immediately before passing it to the script
+  const windows = await sky.list_windows();
+  const match = windows.find(w => /winproj/i.test(w.app) && w.title.includes('edited.mpp'));
+  if (!match) throw new Error('Project window not found');
+  const handle = match.id;   // pass this value to -WindowHandle
+  ```
+</Note>
