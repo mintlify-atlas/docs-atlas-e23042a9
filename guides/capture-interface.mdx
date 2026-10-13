@@ -125,14 +125,14 @@ Before writing a single pixel, `Guardar-Captura-Project.ps1` performs all of the
 
 | Check | What fails it |
 | --- | --- |
-| `WINPROJ` process | No Microsoft Project instance is running |
-| Foreground window ownership | The foreground window does not belong to `WINPROJ` |
-| Expected title | `-ExpectedTitle` text is not contained in the window title |
+| Foreground window match | `-WindowHandle` is provided but does not match the current foreground window |
+| `WINPROJ` process | The foreground window does not belong to a `WINPROJ` process |
 | Not minimized | The Project window is in a minimized (iconic) state |
-| Visible rectangle | The window is entirely outside the virtual desktop bounds |
-| Focus stability | The foreground window changes between the pre-capture check and the moment of writing |
+| Expected title | `-ExpectedTitle` text is not contained in the window title |
+| Visible rectangle | The window rectangle does not intersect the virtual desktop bounds |
+| Focus stability | The foreground window changes between the pixel capture and the moment of writing the file |
 
-The check for focus stability is critical: if something steals focus between the validation step and the actual `CopyFromScreen` call, the script aborts and no PNG is written.
+The check for focus stability is critical: the script calls `CopyFromScreen` first, then re-reads the foreground window. If focus changed during that interval, the script aborts and no PNG is written to disk—the captured pixels are discarded.
 
 ## Using -WindowHandle for explicit targeting
 

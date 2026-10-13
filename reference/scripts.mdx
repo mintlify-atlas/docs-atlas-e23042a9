@@ -1,5 +1,5 @@
 ---
-title: "Script reference for MsProject2019 Agent Kit"
+title: "PowerShell script reference for MsProject2019 Agent Kit"
 sidebarTitle: "Scripts"
 description: "Complete parameter reference for every public PowerShell script in the Agent Kit: required vs optional params, valid values, and usage examples."
 ---
@@ -119,10 +119,10 @@ powershell.exe -NoProfile -NonInteractive -STA -File "scripts\Export-ProjectImag
 
 ## Export-ProjectTable.ps1
 
-Reads a `PASS` report written by `Project-Codex.ps1` and exports the embedded task snapshot as a UTF-8 CSV and a GitHub-flavoured Markdown table. No COM connection is required; the script is pure PowerShell.
+Reads a JSON report produced by `Project-Codex.ps1` and exports the embedded task snapshot as a UTF-8 CSV and a GitHub-flavoured Markdown table. No COM connection is required; the script is pure PowerShell. Both `Inspect` reports (no `Result` field) and `PASS` reports are accepted, provided they contain a `Project.Tasks` array.
 
 <ParamField path="-ReportPath" type="string" required>
-  Path to an existing JSON report produced by `Project-Codex.ps1` with `Result: "PASS"`. The file must contain a `Project.Tasks` array.
+  Path to an existing JSON report produced by `Project-Codex.ps1`. Accepted formats: an `Inspect` report or a `PASS` report from `Create`/`UpdateCopy`. The file must contain a `Project.Tasks` array. A report with `Result` set to any value other than `"PASS"` is rejected.
 </ParamField>
 
 <ParamField path="-OutputDirectory" type="string" required>

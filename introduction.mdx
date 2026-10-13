@@ -1,21 +1,28 @@
 ---
 title: "MsProject2019 Agent Kit: AI-Driven Project Automation"
 sidebarTitle: "Introduction"
-description: "A reproducible PowerShell toolkit that lets Codex and AI agents create, edit, and export Microsoft Project 2019 schedules via XML, COM, and GDI — no API key required."
+description: "A reproducible PowerShell toolkit for AI agents to automate Microsoft Project 2019 via XML, COM, and GDI — no API key or add-ins required."
 ---
 
 MsProject2019 Agent Kit is an open-source PowerShell toolkit that gives Codex and other AI agents a structured, reproducible way to automate Microsoft Project 2019 on Windows. Instead of rediscovering COM quirks or writing one-off bridge scripts, agents follow a tested skill that handles schedule creation, data editing, table export, and full-resolution image generation — all without requiring an API key, VBA macros, Office add-ins, or any Python package for core operations.
 
 ## What the kit does
 
-The kit targets four classes of operation. Each maps to a specific script and verification mode:
+The kit covers ten distinct operations. Each maps to a specific script and verification mode:
 
-| Operation | Description | Primary script |
-|-----------|-------------|---------------|
+| Operation | Description | Script |
+|-----------|-------------|--------|
 | **Inspect** | Read tasks, durations, dates, progress, links, milestones, and constraints from the active document | `Project-Codex.ps1 -Action Inspect` |
-| **Create** | Build a new schedule from a JSON plan using bulk XML import; Project calculates dates and saves the `.mpp` | `Project-Codex.ps1 -Action Create` |
-| **UpdateCopy** | Apply name, duration, or progress changes to a _copy_ of an existing `.mpp`; source file is never touched | `Project-Codex.ps1 -Action UpdateCopy` |
-| **Export** | Produce a full-length table image (GIF → PNG), a table+Gantt image, a CSV, or a Markdown table | `Export-ProjectImage.ps1`, `Export-ProjectTable.ps1` |
+| **Create / Xml** | Build a new schedule from a JSON plan using bulk XML import; Project calculates dates and saves the `.mpp` | `Project-Codex.ps1 -Action Create -CreationMode Xml` |
+| **Create / Com** | Create tasks one-by-one via COM calls using Project's default settings; available as an alternative to XML | `Project-Codex.ps1 -Action Create -CreationMode Com` |
+| **UpdateCopy** | Apply name, duration, or progress changes to a _copy_ of an existing `.mpp`; the source file is never touched | `Project-Codex.ps1 -Action UpdateCopy` |
+| **Export-ProjectImage / Table** | Export a full-length table-only PNG using Project's native GIF exporter; all rows included, no scroll required | `Export-ProjectImage.ps1 -Mode Table` |
+| **Export-ProjectImage / TableAndGantt** | Export a full-length table-plus-Gantt PNG in a single command; the exporter manages its own copy and restore | `Export-ProjectImage.ps1 -Mode TableAndGantt` |
+| **Export-ProjectTable** | Produce a CSV and Markdown table from a verified inspection report without re-opening Project | `Export-ProjectTable.ps1` |
+| **Project-View Open / Restore** | Open a result file so it can be inspected or captured, then restore the previous document when done | `Project-View.ps1 -Action Open` / `-Action Restore` |
+| **Guardar-Captura** | Capture a real GDI screenshot of the visible Project window for requests that need to show the application UI | `Guardar-Captura-Project.ps1` |
+| **Convert-ProjectGifToPng** | Convert a GIF produced by Project's native exporter to PNG with pixel-perfect fidelity and no rescaling | `Convert-ProjectGifToPng.ps1` |
+| **Test-ProjectEnvironment** | Verify that PowerShell 5.1 STA, a single Project instance, and an active document are all present before any operation | `Test-ProjectEnvironment.ps1` |
 
 Every mutating operation ends with a reopened verification: the script closes the result, reopens it in read mode, and compares persisted fields against what was requested. A report is only marked `Result: PASS` when that comparison succeeds.
 
